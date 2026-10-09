@@ -1,0 +1,55 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+
+# Local rvs environment overrides
+.rvs.env
+rvs.env
+*.local.env
+
+# Test and coverage output
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging and build artifacts
+build/
+dist/
+packaging/repository/keys/*.gpg
+packaging/installer-worker/node_modules/
+packaging/installer-worker/.wrangler/
+packaging/installer-worker/src/*.generated.js
+packaging/installer-worker/src/install.sh
+packaging/installer-worker/src/install.ps1
+packaging/.installer-worker-check/
+*.egg-info/
+*.deb
+*.rpm
+*.apk
+*.tar.gz
+*.tgz
+*.zip
+*.dmg
+*.pkg
+*.msi
+*.exe
+*.AppImage
+*.snap
+*.sha256
+*.sig
+*.asc
+# Pinned public keys and signed test fixtures are source, not build output.
+!packaging/repository/keys/*.asc
+!rvs/resources/*.asc
+!tests/fixtures/*.asc
+*.buildinfo
+*.changes
