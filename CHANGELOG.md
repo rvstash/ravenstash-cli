@@ -6,6 +6,8 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-11
+
 ### Added
 
 - First public release of the Ravenstash CLI. `rvs`, also installed under its full name `ravenstash`, signs in to Ravenstash, selects a personal or organization account, and works with private repositories for PyPI, npm, Maven, and OCI content (container images and Helm charts).
@@ -18,3 +20,8 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 - Local Python, Node.js, and Java runtimes with `rvs runtime`.
 - Signed releases for Linux amd64 and arm64 (Debian packages, glibc and musl portable archives), macOS Intel and Apple Silicon, Windows x64 and ARM64, and Nix. `rvs update` verifies the signed release channel and installs the latest release in the rolling `v0` channel; `rvs update --to 0.MINOR` installs the latest patch of one minor line without pinning it.
 - A configuration written by a pre-release version of `rvs` is not migrated: `rvs` leaves it untouched and asks you to run `rvs profile delete --all` and sign in again.
+
+Detailed release notes: [Ravenstash CLI 0.15.0](docs/releases/0.15.0.md).
+
+[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.0
