@@ -1,0 +1,18 @@
+{
+  "name": "ravenstash-cli-installer-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "embed": "node scripts/embed-installer.mjs",
+    "check": "npm run embed && wrangler deploy --dry-run --outdir ../.installer-worker-check",
+    "deploy": "npm run embed && wrangler deploy",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "wrangler": "4.144.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
+  }
+}

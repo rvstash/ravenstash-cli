@@ -1,0 +1,10 @@
+name = "ravenstash-cli-installer"
+main = "src/index.js"
+compatibility_date = "2026-07-30"
+workers_dev = false
+preview_urls = false
+
+routes = [
+  { pattern = "https://ravenstash.com/install.sh*", zone_name = "ravenstash.com" },
+  { pattern = "https://ravenstash.com/install.ps1*", zone_name = "ravenstash.com" }
+]
