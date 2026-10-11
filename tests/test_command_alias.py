@@ -311,6 +311,8 @@ def _portable_source(tmp_path: Path) -> Path:
         (source / document).write_text("document\n", encoding="utf-8")
     freezer = tmp_path / "freezer" / "PyInstaller"
     freezer.mkdir(parents=True)
+    # A regular package, so it also shadows an installed PyInstaller.
+    (freezer / "__init__.py").write_text("", encoding="utf-8")
     (freezer / "__main__.py").write_text(_FAKE_PYINSTALLER, encoding="utf-8")
     return source
 
