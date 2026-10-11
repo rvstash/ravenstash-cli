@@ -5,22 +5,35 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    groups:
+      python:
+        patterns: ["*"]
 
   - package-ecosystem: npm
     directory: /packaging/installer-worker
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    groups:
+      installer-worker:
+        patterns: ["*"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
 
   - package-ecosystem: docker
     directory: /packaging
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    ignore:
+      # Ubuntu 20.04 is the oldest supported runtime: only its digest may move.
+      - dependency-name: ubuntu
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      # The uv version changes in every workflow and this image together.
+      - dependency-name: astral-sh/uv

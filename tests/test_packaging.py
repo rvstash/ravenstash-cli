@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -325,6 +326,37 @@ def test_protected_branch_has_stable_aggregate_ci_gates() -> None:
     assert jobs["package-smoke"]["needs"] == "changes"
     assert jobs["release-policy"]["needs"] == "changes"
     assert jobs["nix"]["needs"] == "changes"
+
+
+def test_builder_images_name_their_release_and_digest() -> None:
+    dockerfile = (ROOT / "packaging/Dockerfile.ubuntu20").read_text(encoding="utf-8")
+    images = re.findall(r"^FROM (\S+)", dockerfile, re.MULTILINE)
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    uv_versions = set(re.findall(r'^ +version: "(\d+\.\d+\.\d+)"$', workflow, re.MULTILINE))
+
+    # A digest alone follows whatever image is newest; the tag names the release it pins.
+    assert len(images) == 2
+    assert all(re.fullmatch(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}", image) for image in images)
+    assert images[1].startswith("ubuntu:20.04@")
+    assert len(uv_versions) == 1
+    assert images[0].startswith(f"ghcr.io/astral-sh/uv:{uv_versions.pop()}@")
+
+
+def test_dependency_updates_keep_the_build_baseline() -> None:
+    config = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))
+    updates = {entry["package-ecosystem"]: entry for entry in config["updates"]}
+
+    assert set(updates) == {"uv", "npm", "github-actions", "docker"}
+    # One grouped pull request per ecosystem instead of one per dependency.
+    for ecosystem in ("uv", "npm", "github-actions"):
+        assert [group["patterns"] for group in updates[ecosystem]["groups"].values()] == [["*"]]
+    ignored = {
+        rule["dependency-name"]: rule.get("update-types") for rule in updates["docker"]["ignore"]
+    }
+    assert ignored == {
+        "ubuntu": ["version-update:semver-major", "version-update:semver-minor"],
+        "astral-sh/uv": None,
+    }
 
 
 def test_every_change_runs_the_test_suite_and_its_policy_checks() -> None:
