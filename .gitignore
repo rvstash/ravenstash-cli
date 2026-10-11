@@ -47,9 +47,8 @@ packaging/.installer-worker-check/
 *.sha256
 *.sig
 *.asc
-# Pinned public keys and signed test fixtures are source, not build output.
+# Pinned public keys are source, not build output.
 !packaging/repository/keys/*.asc
 !rvs/resources/*.asc
-!tests/fixtures/*.asc
 *.buildinfo
 *.changes
