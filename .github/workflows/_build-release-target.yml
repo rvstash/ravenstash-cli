@@ -1,0 +1,166 @@
+name: build-release-target
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+      target:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      kind:
+        type: string
+        required: true
+      architecture:
+        type: string
+        required: true
+      artifact_paths:
+        type: string
+        required: true
+      include_metadata:
+        type: boolean
+        required: false
+        default: false
+      version_override:
+        type: string
+        required: false
+        default: ""
+      artifact_prefix:
+        type: string
+        required: false
+        default: ravenstash-cli-target
+      retention_days:
+        type: number
+        required: false
+        default: 1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ inputs.target }}
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Load release identity
+        shell: bash
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+
+      - name: Set up pinned uv
+        if: inputs.kind == 'portable'
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.11.24"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Derive the dependency cache from the immutable source lockfile. The
+      # test-build override changes only this project's identity, not its
+      # dependency graph, and must not create eight one-use cache keys.
+      - name: Apply ephemeral test-build version
+        if: inputs.version_override != ''
+        shell: bash
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
+        run: |
+          python_command=python3
+          command -v "$python_command" >/dev/null 2>&1 || python_command=python
+          "$python_command" packaging/scripts/prepare_test_build.py apply "$VERSION_OVERRIDE"
+
+      - name: Build and exercise glibc package
+        if: inputs.kind == 'glibc'
+        shell: bash
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
+        run: |
+          packaging/scripts/build-in-ubuntu20.sh
+          docker run --rm \
+            --env ARCHITECTURE \
+            --env RAVENSTASH_CLI_PACKAGE \
+            --volume "$PWD/dist/release:/release:ro" \
+            ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214 \
+            /bin/bash -euc '
+              sed -i \
+                -e "s|http://archive.ubuntu.com/ubuntu/|http://azure.archive.ubuntu.com/ubuntu/|g" \
+                -e "s|http://security.ubuntu.com/ubuntu/|http://azure.archive.ubuntu.com/ubuntu/|g" \
+                /etc/apt/sources.list
+              apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+              apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install \
+                --yes /release/${RAVENSTASH_CLI_PACKAGE}_*_${ARCHITECTURE}.deb
+              test "$(dpkg --print-architecture)" = "$ARCHITECTURE"
+              rvs --version
+              rvs --help >/dev/null
+              ravenstash --version
+              test -e "/usr/lib/${RAVENSTASH_CLI_PACKAGE}/_internal/libpython3.14.so.1.0"
+            '
+
+      - name: Build and smoke-test native bundle
+        if: inputs.kind == 'portable'
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv sync --frozen --python 3.14 --group release
+          uv run python packaging/scripts/build_portable.py
+          bundle="build/release/${RAVENSTASH_CLI_ASSET_STEM}-v${VERSION}-${TARGET}"
+          test -d "$bundle"
+          uv run python packaging/scripts/smoke_portable.py "$bundle"
+
+      - name: Build and smoke-test musl bundle
+        if: inputs.kind == 'musl'
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          docker run --rm \
+            --env TARGET \
+            --env VERSION \
+            --env RAVENSTASH_CLI_ASSET_STEM \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            python@sha256:c6ead215bfd31f1e433d968853b7a769989117115b728874824e6c0a27cb96fc \
+            /bin/sh -euc '
+              apk add --no-cache bash binutils build-base libffi-dev
+              pip install --no-cache-dir uv==0.11.24
+              export UV_PROJECT_ENVIRONMENT=/tmp/rvs-musl-venv
+              uv sync --frozen --python 3.14 --group release
+              uv run pytest
+              uv run python packaging/scripts/build_portable.py
+              bundle="build/release/${RAVENSTASH_CLI_ASSET_STEM}-v${VERSION}-${TARGET}"
+              test -d "$bundle"
+              uv run python packaging/scripts/smoke_portable.py "$bundle"
+            '
+
+      - name: Upload target-specific handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ inputs.artifact_prefix }}-${{ inputs.target }}-${{ inputs.source_sha }}
+          path: ${{ inputs.artifact_paths }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: ${{ inputs.retention_days }}
+
+      - name: Upload canonical release metadata handoff
+        if: inputs.include_metadata
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ inputs.artifact_prefix }}-metadata-${{ inputs.source_sha }}
+          path: dist/release/${{ env.RAVENSTASH_CLI_ASSET_STEM }}-v${{ inputs.version }}-sbom.cdx.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: ${{ inputs.retention_days }}

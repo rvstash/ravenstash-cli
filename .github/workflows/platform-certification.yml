@@ -1,0 +1,166 @@
+name: platform-certification
+run-name: ${{ github.event_name == 'schedule' && 'Platform certification · Weekly' || format('Platform certification · {0}', github.ref_name) }}
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-certification
+  cancel-in-progress: false
+
+jobs:
+  native-runtimes-and-keyring:
+    name: runtimes and keyring (${{ matrix.name }})
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+          - name: macOS Apple Silicon
+            runner: macos-14
+          - name: macOS Intel
+            runner: macos-15-intel
+          - name: Windows x64
+            runner: windows-2022
+          - name: Windows ARM64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        shell: bash
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.11.24"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install GnuPG on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gnupg
+      - name: Install GnuPG on macOS
+        if: runner.os == 'macOS'
+        run: brew install gnupg
+      - name: Expose the runner's GnuPG on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gnupg = "C:\msys64\usr\bin"
+          if (-not (Test-Path (Join-Path $gnupg "gpgv.exe"))) {
+            throw "The Windows runner does not provide gpgv.exe"
+          }
+          $gnupg | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build frozen bundle
+        shell: bash
+        run: |
+          uv sync --frozen --python 3.14 --group release
+          uv run python packaging/scripts/build_portable.py
+      - name: Exercise real runtime downloads
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          bundle="$(find build/release -mindepth 1 -maxdepth 1 -type d -name "${RAVENSTASH_CLI_ASSET_STEM}-v*" -print -quit)"
+          export RVS_HOME="$RUNNER_TEMP/rvs-runtime-certification"
+          uv run python packaging/scripts/certify_managed_runtimes.py "$bundle"
+      - name: Exercise native desktop credential store
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          bundle="$(find build/release -mindepth 1 -maxdepth 1 -type d -name "${RAVENSTASH_CLI_ASSET_STEM}-v*" -print -quit)"
+          export RVS_HOME="$RUNNER_TEMP/rvs-keyring-certification"
+          export RVS_CREDENTIAL_STORE=keyring
+          "$bundle/rvs${{ runner.os == 'Windows' && '.exe' || '' }}" auth storage doctor
+
+  alpine-runtimes:
+    name: runtimes (Alpine musl ${{ matrix.arch }})
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            node-argument: --expect-node-unavailable
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            node-argument: --expect-node-unavailable
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Build bundle and exercise real runtime downloads
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NODE_ARGUMENT: ${{ matrix.node-argument }}
+        run: |
+          docker run --rm \
+            --env GITHUB_TOKEN \
+            --env NODE_ARGUMENT \
+            --env RAVENSTASH_CLI_ASSET_STEM \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            python@sha256:c6ead215bfd31f1e433d968853b7a769989117115b728874824e6c0a27cb96fc \
+            /bin/sh -euc '
+              apk add --no-cache binutils build-base libffi-dev gnupg
+              pip install --no-cache-dir uv==0.11.24
+              export UV_PROJECT_ENVIRONMENT=/tmp/rvs-musl-venv
+              export RVS_HOME=/tmp/rvs-runtime-certification
+              export GITHUB_TOKEN
+              uv sync --frozen --python 3.14 --group release
+              uv run python packaging/scripts/build_portable.py
+              bundle="$(find build/release -mindepth 1 -maxdepth 1 -type d -name "${RAVENSTASH_CLI_ASSET_STEM}-v*" -print -quit)"
+              uv run python packaging/scripts/certify_managed_runtimes.py "$bundle" $NODE_ARGUMENT
+            '
+
+  linux-secret-service:
+    name: Secret Service round trip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        shell: bash
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.11.24"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install Secret Service implementation
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring
+      - name: Build frozen bundle
+        run: |
+          uv sync --frozen --python 3.14 --group release
+          uv run python packaging/scripts/build_portable.py
+      - name: Exercise disposable Secret Service write, read, and delete
+        run: |
+          bundle="$(find build/release -mindepth 1 -maxdepth 1 -type d -name "${RAVENSTASH_CLI_ASSET_STEM}-v*" -print -quit)"
+          export RAVENSTASH_CLI_CERTIFICATION_BUNDLE="$PWD/$bundle/rvs"
+          # shellcheck disable=SC2016
+          dbus-run-session -- bash -euc '
+            printf "rvs-ci-keyring\n" | gnome-keyring-daemon --unlock
+            export RVS_HOME="$RUNNER_TEMP/rvs-secret-service-certification"
+            export RVS_CREDENTIAL_STORE=keyring
+            "$RAVENSTASH_CLI_CERTIFICATION_BUNDLE" auth storage doctor
+          '

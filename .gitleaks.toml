@@ -1,0 +1,15 @@
+title = "Ravenstash CLI secret scan"
+
+[extend]
+useDefault = true
+
+# Trust anchors that look like keys to a generic rule: the fingerprint of the
+# public release key and a pinned upstream commit. Neither is a secret.
+[allowlist]
+description = "Public key fingerprints and pinned upstream commits"
+regexTarget = "line"
+regexes = [
+  '''signing_key_fingerprint="[0-9A-F]{40}"''',
+  '''SIGNING_KEY_FINGERPRINT = "[0-9A-F]{40}"''',
+  '''_RELEASE_KEYS_COMMIT = "[0-9a-f]{40}"''',
+]

@@ -1,0 +1,177 @@
+name: refresh-apt-metadata
+run-name: ${{ github.event_name == 'schedule' && 'APT metadata refresh · Scheduled' || 'APT metadata refresh · Manual' }}
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ravenstash-cli-release
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    # Nothing is published before the first stable release, so the schedule
+    # stays idle until the repository variable enables it. A manual dispatch
+    # always runs.
+    if: github.event_name != 'schedule' || vars.RAVENSTASH_CLI_PUBLISHING == 'enabled'
+    runs-on: ubuntu-24.04
+    environment: apt-signing
+    outputs:
+      signed_metadata: ${{ steps.handoff.outputs.signed_metadata }}
+    steps:
+      - name: Check out signing policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install signing tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes apt-utils dpkg-dev gnupg gpgv
+      - name: Materialize and pin trusted keyring
+        run: packaging/repository/prepare_keyring.sh
+      - name: Restore and authenticate public APT state before exposing signer
+        run: |
+          python3 packaging/repository/restore_public_apt.py \
+            "$RAVENSTASH_CLI_APT_URL" \
+            prior \
+            "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+      - name: Refresh and sign metadata
+        env:
+          RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY: ${{ secrets.RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY }}
+          RAVENSTASH_CLI_APT_GPG_PASSPHRASE: ${{ secrets.RAVENSTASH_CLI_APT_GPG_PASSPHRASE }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/rvs-apt-signing"
+          install -d -m 0700 "$GNUPGHOME"
+          printf '%s' "$RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(
+            gpg --batch --with-colons --list-secret-keys \
+              | awk -F: '$1 == "fpr" { print $10; exit }'
+          )"
+          test -n "$key_id"
+          passphrase_file="$RUNNER_TEMP/rvs-apt-passphrase"
+          printf '%s' "$RAVENSTASH_CLI_APT_GPG_PASSPHRASE" > "$passphrase_file"
+          chmod 0600 "$passphrase_file"
+          name="$RAVENSTASH_CLI_PACKAGE"
+          package="$(
+            find "prior/pool/main/${name:0:1}/${name}" -maxdepth 1 -type f \
+                -name "${name}_*_amd64_*.deb" \
+              | sort -V \
+              | tail -n 1
+          )"
+          test -n "$package"
+          version="$(dpkg-deb --field "$package" Version)"
+          channel="$(python3 packaging/repository/channel_policy.py channel-for-version "$version")"
+          RAVENSTASH_CLI_APT_GPG_KEY_ID="$key_id" \
+          RAVENSTASH_CLI_APT_GPG_FINGERPRINT="$(tr -d '[:space:]' < packaging/repository/keys/fingerprint.txt)" \
+          RAVENSTASH_CLI_APT_GPG_PASSPHRASE_FILE="$passphrase_file" \
+          RAVENSTASH_CLI_APT_CHANNEL="$channel" \
+          RAVENSTASH_CLI_APT_REFRESH_ALL=1 \
+            packaging/repository/append_and_sign_apt.sh \
+              prior signed "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}" "$package"
+          rm -f "$passphrase_file"
+          rm -rf "$GNUPGHOME"
+      - name: Create bounded signed metadata handoff
+        id: handoff
+        run: |
+          python3 packaging/repository/refresh_handoff.py \
+            create prior signed "$RUNNER_TEMP/refresh-metadata.tar.gz"
+          test "$(stat --format=%s "$RUNNER_TEMP/refresh-metadata.tar.gz")" -le 100000
+          encoded="$(
+            python3 -c \
+              'import pathlib, sys; print(" ".join(map(str, pathlib.Path(sys.argv[1]).read_bytes())))' \
+              "$RUNNER_TEMP/refresh-metadata.tar.gz"
+          )"
+          printf 'signed_metadata=%s\n' "$encoded" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: sign
+    runs-on: ubuntu-24.04
+    environment: apt-storage
+    permissions:
+      contents: read
+    steps:
+      - name: Check out publication policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install publication verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dpkg-dev gnupg gpgv
+          aws --version
+      - name: Materialize and pin trusted keyring
+        run: packaging/repository/prepare_keyring.sh
+      - name: Restore and authenticate canonical APT state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          mkdir signed
+          aws s3 sync \
+            "s3://${RAVENSTASH_CLI_STORAGE_BUCKET}/${RAVENSTASH_CLI_NAMESPACE}/apt/" signed/ \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --no-progress
+          python3 packaging/repository/verify_apt.py \
+            signed "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+      - name: Apply refreshed signed metadata
+        env:
+          SIGNED_METADATA: ${{ needs.sign.outputs.signed_metadata }}
+        run: |
+          test -n "$SIGNED_METADATA"
+          python3 -c \
+            'import os, pathlib, sys; pathlib.Path(sys.argv[1]).write_bytes(bytes(map(int, os.environ["SIGNED_METADATA"].split())))' \
+            "$RUNNER_TEMP/refresh-metadata.tar.gz"
+          python3 packaging/repository/refresh_handoff.py \
+            apply signed "$RUNNER_TEMP/refresh-metadata.tar.gz"
+      - name: Authenticate signed handoff
+        run: >-
+          python3 packaging/repository/verify_apt.py
+          signed "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+      - name: Publish with InRelease last
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          packaging/repository/publish_apt.sh \
+            signed \
+            "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            "$RAVENSTASH_CLI_STORAGE_BUCKET"
+      - name: Refresh the portable-update manifest when its policy is unchanged
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          # The signed manifest expires, so the portable copy is re-signed with the
+          # APT metadata. Only its freshness fields may change here: a release that
+          # has not reached the portable manifest yet is published by release.yml.
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          destination="s3://${RAVENSTASH_CLI_STORAGE_BUCKET}/${RAVENSTASH_CLI_NAMESPACE}"
+          if ! aws s3 cp "$destination/channels.json" portable-channels.json \
+              --endpoint-url "$endpoint" --only-show-errors; then
+            echo "::warning::No portable channel manifest to refresh"
+            exit 0
+          fi
+          if ! python3 packaging/repository/channel_policy.py same-policy \
+              portable-channels.json signed/channels.json; then
+            echo "::warning::Portable channel policy differs from APT; leaving it for the release workflow"
+            exit 0
+          fi
+          aws s3 cp signed/channels.json "$destination/channels.json" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors
+          aws s3 cp signed/channels.json.gpg "$destination/channels.json.gpg" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors

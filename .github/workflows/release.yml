@@ -1,0 +1,1264 @@
+name: release
+run-name: ${{ inputs.kind == 'candidate' && 'Candidate' || 'Release' }} Ravenstash CLI v${{ inputs.version }} · ${{ inputs.source_branch }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character source commit from the selected protected branch
+        type: string
+        required: true
+      source_branch:
+        description: Protected source branch (main)
+        type: string
+        required: true
+        default: main
+      version:
+        description: Stable X.Y.Z or candidate X.Y.ZrcN version, without v prefix
+        type: string
+        required: true
+      kind:
+        description: Publish a stable release or a signed GitHub prerelease candidate
+        type: choice
+        options:
+          - candidate
+          - stable
+        required: true
+      channel:
+        description: Exact rolling vMAJOR release channel
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ravenstash-cli-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release identity
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate source, version, channel, and release slot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          KIND: ${{ inputs.kind }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SOURCE_BRANCH" = main
+          if [[ "$KIND" == stable ]]; then
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          else
+            test "$KIND" = candidate
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+rc[1-9][0-9]*$ ]]
+          fi
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" "refs/remotes/origin/${SOURCE_BRANCH}"
+          python3 packaging/repository/channel_policy.py validate "$VERSION" "$CHANNEL"
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' pyproject.toml)" = "$VERSION"
+          grep -Fx "readonly release_version=\"${VERSION}\"" packaging/install.sh
+          grep -Fx "readonly compatibility_channel=\"${CHANNEL}\"" packaging/install.sh
+          grep -Fx "\$ReleaseVersion = \"${VERSION}\"" packaging/install.ps1
+          grep -Fx "\$CompatibilityChannel = \"${CHANNEL}\"" packaging/install.ps1
+          packaging/scripts/assert-github-release-slot-empty.sh \
+            "$GITHUB_REPOSITORY" "v${VERSION}"
+      - name: Require successful checks for the exact source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          workflows=(
+            ci.yml
+            platform-certification.yml
+          )
+          {
+            echo "## Required release gates"
+            echo
+            for workflow in "${workflows[@]}"; do
+              run_id="$(
+                gh api \
+                  "/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${SOURCE_SHA}&per_page=100" \
+                  --jq '.workflow_runs | map(select(.conclusion == "success")) | first | .id // empty'
+              )"
+              test -n "$run_id"
+              echo "- \`${workflow}\`: run [\`${run_id}\`](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id})"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  linux-glibc-amd64:
+    name: Build · Linux glibc · amd64
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: linux-glibc-amd64
+      runner: ubuntu-24.04
+      kind: glibc
+      architecture: amd64
+      include_metadata: true
+      artifact_paths: |
+        dist/release/ravenstash-cli_${{ inputs.version }}_amd64.deb
+        dist/release/ravenstash-cli-v${{ inputs.version }}-linux-amd64.tar.gz
+
+  linux-glibc-arm64:
+    name: Build · Linux glibc · arm64
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: linux-glibc-arm64
+      runner: ubuntu-24.04-arm
+      kind: glibc
+      architecture: arm64
+      artifact_paths: |
+        dist/release/ravenstash-cli_${{ inputs.version }}_arm64.deb
+        dist/release/ravenstash-cli-v${{ inputs.version }}-linux-arm64.tar.gz
+
+  linux-musl-amd64:
+    name: Build · Linux musl · amd64
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: linux-musl-amd64
+      runner: ubuntu-24.04
+      kind: musl
+      architecture: amd64
+      artifact_paths: dist/release/ravenstash-cli-v${{ inputs.version }}-linux-musl-amd64.tar.gz
+
+  linux-musl-arm64:
+    name: Build · Linux musl · arm64
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: linux-musl-arm64
+      runner: ubuntu-24.04-arm
+      kind: musl
+      architecture: arm64
+      artifact_paths: dist/release/ravenstash-cli-v${{ inputs.version }}-linux-musl-arm64.tar.gz
+
+  macos-arm64:
+    name: Build · macOS · Apple Silicon
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: macos-arm64
+      runner: macos-14
+      kind: portable
+      architecture: arm64
+      artifact_paths: dist/release/ravenstash-cli-v${{ inputs.version }}-macos-arm64.tar.gz
+
+  macos-amd64:
+    name: Build · macOS · Intel
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: macos-amd64
+      runner: macos-15-intel
+      kind: portable
+      architecture: amd64
+      artifact_paths: dist/release/ravenstash-cli-v${{ inputs.version }}-macos-amd64.tar.gz
+
+  windows-amd64:
+    name: Build · Windows · x64
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: windows-amd64
+      runner: windows-2022
+      kind: portable
+      architecture: amd64
+      artifact_paths: dist/release/ravenstash-cli-v${{ inputs.version }}-windows-amd64.zip
+
+  windows-arm64:
+    name: Build · Windows · ARM64
+    needs: validate
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ inputs.version }}
+      target: windows-arm64
+      runner: windows-11-arm
+      kind: portable
+      architecture: arm64
+      artifact_paths: dist/release/ravenstash-cli-v${{ inputs.version }}-windows-arm64.zip
+
+  assemble:
+    name: Assemble and attest release
+    needs:
+      - linux-glibc-amd64
+      - linux-glibc-arm64
+      - linux-musl-amd64
+      - linux-musl-arm64
+      - macos-arm64
+      - macos-amd64
+      - windows-amd64
+      - windows-arm64
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Download isolated target handoffs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ env.RAVENSTASH_CLI_PACKAGE }}-target-*-${{ inputs.source_sha }}
+          path: build/targets
+      - name: Install pinned Sigstore signer
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.0.6
+      - name: Assemble a collision-free release inventory
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          KIND: ${{ inputs.kind }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+        run: |
+          install -d build/release
+          package="$RAVENSTASH_CLI_PACKAGE"
+          stem="$RAVENSTASH_CLI_ASSET_STEM"
+          expected=(
+            "${package}_${VERSION}_amd64.deb"
+            "${package}_${VERSION}_arm64.deb"
+            "${stem}-v${VERSION}-linux-amd64.tar.gz"
+            "${stem}-v${VERSION}-linux-arm64.tar.gz"
+            "${stem}-v${VERSION}-linux-musl-amd64.tar.gz"
+            "${stem}-v${VERSION}-linux-musl-arm64.tar.gz"
+            "${stem}-v${VERSION}-macos-amd64.tar.gz"
+            "${stem}-v${VERSION}-macos-arm64.tar.gz"
+            "${stem}-v${VERSION}-windows-amd64.zip"
+            "${stem}-v${VERSION}-windows-arm64.zip"
+            "${stem}-v${VERSION}-sbom.cdx.json"
+          )
+          for filename in "${expected[@]}"; do
+            mapfile -t matches < <(find build/targets -type f -name "$filename" -print)
+            test "${#matches[@]}" = 1
+            install -m 0644 "${matches[0]}" "build/release/$filename"
+          done
+          install -m 0755 packaging/install.sh "build/release/${stem}-install.sh"
+          install -m 0644 packaging/install.ps1 "build/release/${stem}-install.ps1"
+          python3 packaging/scripts/generate_package_manifests.py \
+            build/release "$VERSION" "$GITHUB_REPOSITORY"
+          printf '%s\n' \
+            "source_repository=${GITHUB_REPOSITORY}" \
+            "source_sha=${SOURCE_SHA}" \
+            "version=${VERSION}" \
+            "channel=${CHANNEL}" \
+            "release_kind=${KIND}" \
+            "source_branch=${SOURCE_BRANCH}" \
+            "release_run_id=${GITHUB_RUN_ID}" \
+            "release_workflow=.github/workflows/release.yml" \
+            > "build/release/${stem}-source-identity.txt"
+          (
+            cd build/release
+            find . -maxdepth 1 -type f ! -name '*-checksums.txt' ! -name '*.sigstore.json' \
+              -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > "${stem}-v${VERSION}-checksums.txt"
+          )
+          cosign sign-blob --yes \
+            --bundle "build/release/${stem}-v${VERSION}-checksums.sigstore.json" \
+            "build/release/${stem}-v${VERSION}-checksums.txt"
+      - name: Summarize immutable release inventory
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          {
+            echo "## Release inventory"
+            echo
+            echo "- Run ID: \`${GITHUB_RUN_ID}\`"
+            echo "- Source: \`${{ inputs.source_sha }}\`"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Channel: \`${{ inputs.channel }}\`"
+            echo "- Kind: \`${{ inputs.kind }}\`"
+            echo "- Source branch: \`${{ inputs.source_branch }}\`"
+            echo
+            echo '```text'
+            sed 's/^/  /' "build/release/${RAVENSTASH_CLI_ASSET_STEM}-v${VERSION}-checksums.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload immutable release inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
+          path: build/release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  restore-apt:
+    name: Restore authenticated APT state
+    needs: validate
+    if: inputs.kind == 'stable'
+    runs-on: ubuntu-24.04
+    environment: apt-storage
+    steps:
+      - name: Check out publication policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install restore verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dpkg-dev gnupg gpgv
+          aws --version
+      - name: Materialize pinned trusted keyring
+        run: packaging/repository/prepare_keyring.sh
+      - name: Restore and authenticate canonical APT state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          mkdir -p prior
+          aws s3 sync \
+            "s3://${RAVENSTASH_CLI_STORAGE_BUCKET}/${RAVENSTASH_CLI_NAMESPACE}/apt/" prior/ \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --no-progress
+          if [[ -z "$(find prior -mindepth 1 -print -quit)" ]]; then
+            touch prior/BOOTSTRAP
+          else
+            python3 packaging/repository/recover_missing_apt_indexes.py \
+              prior "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+            python3 packaging/repository/verify_apt.py \
+              prior "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+          fi
+      - name: Upload authenticated prior state
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: authenticated-prior-apt-${{ github.run_id }}
+          path: prior/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  sign:
+    name: Sign release inventory${{ inputs.kind == 'stable' && ' and APT state' || '' }}
+    needs:
+      - assemble
+      - restore-apt
+    if: ${{ always() && needs.assemble.result == 'success' && (inputs.kind == 'candidate' || needs.restore-apt.result == 'success') }}
+    runs-on: ubuntu-24.04
+    environment: apt-signing
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out signing policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install pinned Sigstore verifier
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.0.6
+      - name: Install signing tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes apt-utils dpkg-dev gnupg gpgv
+      - name: Materialize pinned trusted keyring
+        run: packaging/repository/prepare_keyring.sh
+      - name: Download immutable release inventory
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
+          path: build
+      - name: Download authenticated prior state
+        if: inputs.kind == 'stable'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: authenticated-prior-apt-${{ github.run_id }}
+          path: prior
+      - name: Authenticate release inventory and prior state before exposing signer
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CHANNEL: ${{ inputs.channel }}
+          KIND: ${{ inputs.kind }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          RELEASE_RUN_ID: ${{ github.run_id }}
+          SIGNER_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main
+        run: |
+          package="$RAVENSTASH_CLI_PACKAGE"
+          stem="$RAVENSTASH_CLI_ASSET_STEM"
+          source_identity="build/${stem}-source-identity.txt"
+          cosign verify-blob \
+            --bundle "build/${stem}-v${VERSION}-checksums.sigstore.json" \
+            --certificate-identity "$SIGNER_IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "build/${stem}-v${VERSION}-checksums.txt"
+          (
+            cd build
+            sha256sum --check --strict "${stem}-v${VERSION}-checksums.txt"
+          )
+          grep -Fx "source_repository=${GITHUB_REPOSITORY}" "$source_identity"
+          grep -Fx "source_sha=${SOURCE_SHA}" "$source_identity"
+          grep -Fx "version=${VERSION}" "$source_identity"
+          grep -Fx "channel=${CHANNEL}" "$source_identity"
+          grep -Fx "release_kind=${KIND}" "$source_identity"
+          grep -Fx "source_branch=${SOURCE_BRANCH}" "$source_identity"
+          grep -Fx "release_run_id=${RELEASE_RUN_ID}" "$source_identity"
+          grep -Fx "release_workflow=.github/workflows/release.yml" \
+            "$source_identity"
+          test "$(find build -maxdepth 1 -type f -name "${package}_${VERSION}_amd64.deb" | wc -l)" = 1
+          test "$(find build -maxdepth 1 -type f -name "${package}_${VERSION}_arm64.deb" | wc -l)" = 1
+          if [[ "$KIND" == stable ]]; then
+            if [[ -f prior/BOOTSTRAP ]]; then
+              test "$(find prior -mindepth 1 -maxdepth 1 -printf '%f\n')" = BOOTSTRAP
+            else
+              python3 packaging/repository/verify_apt.py \
+                prior "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+            fi
+          fi
+      - name: Sign portable inventory and stable APT state
+        env:
+          RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY: ${{ secrets.RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY }}
+          RAVENSTASH_CLI_APT_GPG_PASSPHRASE: ${{ secrets.RAVENSTASH_CLI_APT_GPG_PASSPHRASE }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          KIND: ${{ inputs.kind }}
+        run: |
+          package="$RAVENSTASH_CLI_PACKAGE"
+          checksums="${RAVENSTASH_CLI_ASSET_STEM}-v${VERSION}-checksums.txt"
+          keyring="packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+          export GNUPGHOME="$RUNNER_TEMP/rvs-apt-signing"
+          install -d -m 0700 "$GNUPGHOME"
+          printf '%s' "$RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(
+            gpg --batch --with-colons --list-secret-keys \
+              | awk -F: '$1 == "fpr" { print $10; exit }'
+          )"
+          test -n "$key_id"
+          passphrase_file="$RUNNER_TEMP/rvs-apt-passphrase"
+          printf '%s' "$RAVENSTASH_CLI_APT_GPG_PASSPHRASE" > "$passphrase_file"
+          chmod 0600 "$passphrase_file"
+          if [[ "$KIND" == stable ]]; then
+            RAVENSTASH_CLI_APT_GPG_KEY_ID="$key_id" \
+            RAVENSTASH_CLI_APT_GPG_FINGERPRINT="$(tr -d '[:space:]' < packaging/repository/keys/fingerprint.txt)" \
+            RAVENSTASH_CLI_APT_GPG_PASSPHRASE_FILE="$passphrase_file" \
+            RAVENSTASH_CLI_APT_CHANNEL="$CHANNEL" \
+              packaging/repository/append_and_sign_apt.sh \
+                prior signed "$keyring" \
+                "build/${package}_${VERSION}_amd64.deb" \
+                "build/${package}_${VERSION}_arm64.deb"
+          fi
+          install -d -m 0755 portable
+          install -m 0644 "build/${checksums}" "portable/${checksums}"
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-file "$passphrase_file" \
+            --local-user "$key_id" \
+            --armor --detach-sign \
+            --output "portable/${checksums}.asc" \
+            "portable/${checksums}"
+          gpgv \
+            --keyring "$keyring" \
+            "portable/${checksums}.asc" \
+            "portable/${checksums}"
+          rm -f "$passphrase_file"
+          rm -rf "$GNUPGHOME"
+      - name: Upload signed APT handoff
+        if: inputs.kind == 'stable'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signed-apt-${{ github.run_id }}
+          path: signed/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Upload signed portable inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signed-portable-${{ github.run_id }}
+          path: portable/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish-apt:
+    name: Publish signed APT state
+    needs: sign
+    if: inputs.kind == 'stable'
+    runs-on: ubuntu-24.04
+    environment: apt-storage
+    permissions:
+      contents: read
+    steps:
+      - name: Check out publication policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install publication verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dpkg-dev gnupg gpgv
+          aws --version
+      - name: Materialize pinned trusted keyring
+        run: packaging/repository/prepare_keyring.sh
+      - name: Download signed APT handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: signed-apt-${{ github.run_id }}
+          path: signed
+      - name: Authenticate complete handoff before exposing storage key
+        run: >-
+          python3 packaging/repository/verify_apt.py
+          signed "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+      - name: Publish ordered batched phases
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          packaging/repository/publish_apt.sh \
+            signed \
+            "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            "$RAVENSTASH_CLI_STORAGE_BUCKET"
+
+  verify-apt:
+    name: Verify APT · ${{ matrix.architecture }}
+    needs: publish-apt
+    if: inputs.kind == 'stable'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository trust policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Materialize pinned trusted keyring
+        run: packaging/repository/prepare_keyring.sh
+      - name: Verify public package installation
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          docker run --rm \
+            --env EXPECTED_VERSION \
+            --env CHANNEL \
+            --env ARCHITECTURE \
+            --env RAVENSTASH_CLI_PACKAGE \
+            --env RAVENSTASH_CLI_APT_URL \
+            --env RAVENSTASH_CLI_KEYRING \
+            --env RAVENSTASH_CLI_SOURCE_LIST \
+            --volume "$PWD/packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}:/usr/share/keyrings/${RAVENSTASH_CLI_KEYRING}:ro" \
+            ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214 \
+            /bin/bash -euc '
+              sed -i \
+                -e "s|http://archive.ubuntu.com/ubuntu/|http://azure.archive.ubuntu.com/ubuntu/|g" \
+                -e "s|http://security.ubuntu.com/ubuntu/|http://azure.archive.ubuntu.com/ubuntu/|g" \
+                /etc/apt/sources.list
+              apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+              apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install --yes ca-certificates
+              printf "%s\n" \
+                "deb [arch=${ARCHITECTURE} signed-by=/usr/share/keyrings/${RAVENSTASH_CLI_KEYRING}] ${RAVENSTASH_CLI_APT_URL} ${CHANNEL} main" \
+                > "/etc/apt/sources.list.d/${RAVENSTASH_CLI_SOURCE_LIST}"
+              apt-get -o Acquire::Retries=3 -o Acquire::https::Timeout=20 update
+              apt-get -o Acquire::Retries=3 -o Acquire::https::Timeout=20 install --yes "$RAVENSTASH_CLI_PACKAGE"
+              test "$(dpkg --print-architecture)" = "$ARCHITECTURE"
+              test "$(dpkg-query -W -f="\${Version}" "$RAVENSTASH_CLI_PACKAGE")" = "$EXPECTED_VERSION"
+              rvs --version
+            '
+
+  prepare-github-release:
+    name: Prepare immutable GitHub ${{ inputs.kind == 'candidate' && 'prerelease' || 'release' }}
+    needs: sign
+    runs-on: ubuntu-24.04
+    outputs:
+      release_api_url: ${{ steps.create.outputs.release_api_url }}
+      release_assets: ${{ steps.create.outputs.release_assets }}
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out release repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Download immutable release inventory
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
+          path: build
+      - name: Download signed portable inventory
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: signed-portable-${{ github.run_id }}
+          path: build
+      - name: Create immutable-source draft and record exact assets
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          KIND: ${{ inputs.kind }}
+        run: |
+          tag="v${VERSION}"
+          packaging/scripts/assert-github-release-slot-empty.sh \
+            "$GITHUB_REPOSITORY" "$tag"
+          prerelease=()
+          if [[ "$KIND" == candidate ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --draft \
+            "${prerelease[@]}" \
+            --title "$tag" \
+            --notes "Ravenstash CLI ${KIND} ${tag} on ${CHANNEL}; exact source ${GITHUB_REPOSITORY}@${SOURCE_SHA}." \
+            build/*
+          release_api_url="$(
+            gh release view "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json apiUrl \
+              --jq .apiUrl
+          )"
+          [[ "$release_api_url" =~ ^https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/[0-9]+$ ]]
+          (
+            cd build
+            for filename in *; do
+              test -f "$filename"
+              digest="$(sha256sum "$filename" | cut -d ' ' -f 1)"
+              printf '%s\tsha256:%s\n' "$filename" "$digest"
+            done
+          ) | LC_ALL=C sort > expected-release-assets.tsv
+          {
+            echo "release_api_url=${release_api_url}"
+            echo "release_assets=$(base64 -w0 expected-release-assets.tsv)"
+          } >> "$GITHUB_OUTPUT"
+
+  publish-github-release:
+    name: Publish immutable GitHub ${{ inputs.kind == 'candidate' && 'prerelease' || 'release' }}
+    needs:
+      - prepare-github-release
+      - verify-apt
+    if: ${{ always() && needs.prepare-github-release.result == 'success' && (inputs.kind == 'candidate' || needs.verify-apt.result == 'success') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish authenticated immutable-source draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          KIND: ${{ inputs.kind }}
+          RELEASE_API_URL: ${{ needs.prepare-github-release.outputs.release_api_url }}
+          EXPECTED_RELEASE_ASSETS: ${{ needs.prepare-github-release.outputs.release_assets }}
+        run: |
+          tag="v${VERSION}"
+          notes="Ravenstash CLI ${KIND} ${tag} on ${CHANNEL}; exact source ${GITHUB_REPOSITORY}@${SOURCE_SHA}."
+          prerelease=false
+          if [[ "$KIND" == candidate ]]; then
+            prerelease=true
+          fi
+          [[ "$RELEASE_API_URL" =~ ^https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/[0-9]+$ ]]
+          printf '%s' "$EXPECTED_RELEASE_ASSETS" \
+            | base64 --decode > expected-release-assets.tsv
+          gh api "$RELEASE_API_URL" > release.json
+          jq -e \
+            --arg tag "$tag" \
+            --arg notes "$notes" \
+            --arg source_sha "$SOURCE_SHA" \
+            --argjson prerelease "$prerelease" \
+            '.tag_name == $tag and
+             .name == $tag and
+             .body == $notes and
+             .target_commitish == $source_sha and
+             .draft == true and
+             .prerelease == $prerelease' \
+            release.json >/dev/null
+          jq -r '.assets[] | [.name, .digest] | @tsv' release.json \
+            | LC_ALL=C sort > actual-release-assets.tsv
+          cmp expected-release-assets.tsv actual-release-assets.tsv
+          gh api --method PATCH "$RELEASE_API_URL" -F draft=false \
+            --jq 'select(.draft == false) | .html_url'
+
+  publish-update-manifest:
+    name: Publish signed portable update policy
+    needs: publish-github-release
+    if: inputs.kind == 'stable'
+    runs-on: ubuntu-24.04
+    environment: apt-storage
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out publication policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gnupg gpgv
+          aws --version
+      - name: Materialize pinned trusted keyring
+        run: packaging/repository/prepare_keyring.sh
+      - name: Download signed release policy
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: signed-apt-${{ github.run_id }}
+          path: signed
+      - name: Authenticate policy before exposing storage key
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gpgv \
+            --keyring "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}" \
+            signed/channels.json.gpg signed/channels.json
+          jq -e --arg channel "$CHANNEL" --arg version "$VERSION" \
+            '.schema == 1 and .channels[$channel].latest == $version' \
+            signed/channels.json >/dev/null
+      - name: Publish manifest with signature last
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          destination="s3://${RAVENSTASH_CLI_STORAGE_BUCKET}/${RAVENSTASH_CLI_NAMESPACE}"
+          aws s3 cp signed/channels.json "$destination/channels.json" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors
+          aws s3 cp signed/channels.json.gpg "$destination/channels.json.gpg" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors
+
+  sign-channel-manifest:
+    name: Validate release and sign channel promotion
+    needs: publish-github-release
+    if: inputs.kind == 'stable'
+    runs-on: ubuntu-24.04
+    environment: apt-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Check out promotion policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check out exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          path: release-source
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install pinned Sigstore verifier
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.0.6
+      - name: Install signing tools and materialize trusted keyring
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dpkg-dev gnupg gpgv
+          packaging/repository/prepare_keyring.sh
+      - name: Restore authenticated public APT state
+        run: |
+          python3 packaging/repository/restore_public_apt.py \
+            "$RAVENSTASH_CLI_APT_URL" \
+            prior \
+            "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}" \
+            --metadata-only
+      - name: Authenticate the published release and refuse rollback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          CURRENT_RELEASE_SIGNER: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$SOURCE_BRANCH" = main
+          test "$(git -C release-source rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C release-source merge-base --is-ancestor \
+            "$SOURCE_SHA" "refs/remotes/origin/${SOURCE_BRANCH}"
+          python3 release-source/packaging/repository/channel_policy.py \
+            validate "$VERSION" "$CHANNEL"
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' release-source/pyproject.toml)" = "$VERSION"
+          tag="v${VERSION}"
+          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)" = "$SOURCE_SHA"
+          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = false
+          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = false
+          stem="$RAVENSTASH_CLI_ASSET_STEM"
+          checksums="${stem}-v${VERSION}-checksums.txt"
+          source_identity="release-build/${stem}-source-identity.txt"
+          mkdir release-build
+          gh release download "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-build \
+            --pattern "${stem}-install.*" \
+            --pattern "${stem}-source-identity.txt" \
+            --pattern "${checksums%.txt}*"
+          cosign verify-blob \
+            --bundle "release-build/${checksums%.txt}.sigstore.json" \
+            --certificate-identity "$CURRENT_RELEASE_SIGNER" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "release-build/${checksums}"
+          gpgv \
+            --keyring "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}" \
+            "release-build/${checksums}.asc" \
+            "release-build/${checksums}"
+          (
+            cd release-build
+            grep -E "  ${stem}-(install\.sh|install\.ps1|source-identity\.txt)\$" \
+              "$checksums" \
+              | sha256sum --check --strict
+          )
+          grep -Fx "source_repository=${GITHUB_REPOSITORY}" "$source_identity"
+          grep -Fx "source_sha=${SOURCE_SHA}" "$source_identity"
+          grep -Fx "version=${VERSION}" "$source_identity"
+          grep -Fx "channel=${CHANNEL}" "$source_identity"
+          grep -Fx "release_run_id=${GITHUB_RUN_ID}" "$source_identity"
+          grep -Fx 'release_workflow=.github/workflows/release.yml' \
+            "$source_identity"
+          cmp release-source/packaging/install.sh "release-build/${stem}-install.sh"
+          cmp release-source/packaging/install.ps1 "release-build/${stem}-install.ps1"
+          current_version="$(
+            curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              --max-redirs 0 -fsS https://ravenstash.com/install.sh \
+              | sed -n 's/^readonly release_version="\([^"]*\)"/\1/p'
+          )"
+          test -n "$current_version"
+          dpkg --compare-versions "$VERSION" ge "$current_version"
+          python3 -c \
+            'import json, pathlib, sys; data=json.loads((pathlib.Path(sys.argv[1]) / "channels.json").read_text()); assert data["channels"][sys.argv[2]]["latest"] == sys.argv[3]' \
+            prior "$CHANNEL" "$VERSION"
+      - name: Sign promoted channel manifest
+        env:
+          RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY: ${{ secrets.RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY }}
+          RAVENSTASH_CLI_APT_GPG_PASSPHRASE: ${{ secrets.RAVENSTASH_CLI_APT_GPG_PASSPHRASE }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/rvs-channel-promotion"
+          install -d -m 0700 "$GNUPGHOME" promoted
+          printf '%s' "$RAVENSTASH_CLI_APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(
+            gpg --batch --with-colons --list-secret-keys \
+              | awk -F: '$1 == "fpr" { print $10; exit }'
+          )"
+          test -n "$key_id"
+          test "$key_id" = "$(tr -d '[:space:]' < packaging/repository/keys/fingerprint.txt)"
+          passphrase_file="$RUNNER_TEMP/rvs-apt-passphrase"
+          printf '%s' "$RAVENSTASH_CLI_APT_GPG_PASSPHRASE" > "$passphrase_file"
+          chmod 0600 "$passphrase_file"
+          python3 packaging/repository/channel_policy.py manifest \
+            prior "$CHANNEL" > promoted/channels.json
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-file "$passphrase_file" \
+            --local-user "$key_id" \
+            --output promoted/channels.json.gpg \
+            --detach-sign promoted/channels.json
+          gpgv \
+            --keyring "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}" \
+            promoted/channels.json.gpg promoted/channels.json
+          rm -f "$passphrase_file"
+          rm -rf "$GNUPGHOME"
+      - name: Upload bounded promotion handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: promoted-channel-${{ github.run_id }}
+          path: promoted/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish-channel-manifest:
+    name: Publish promoted channel manifest
+    needs:
+      - sign-channel-manifest
+      - deploy-installer
+    runs-on: ubuntu-24.04
+    environment: apt-storage
+    permissions:
+      contents: read
+    steps:
+      - name: Check out publication policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Install publication verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dpkg-dev gnupg gpgv
+          packaging/repository/prepare_keyring.sh
+          aws --version
+      - name: Restore and authenticate canonical APT state
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          mkdir -p canonical
+          aws s3 sync \
+            "s3://${RAVENSTASH_CLI_STORAGE_BUCKET}/${RAVENSTASH_CLI_NAMESPACE}/apt/" canonical/ \
+            --endpoint-url "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --no-progress
+          python3 packaging/repository/verify_apt.py \
+            canonical "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+      - name: Download and authenticate promoted manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: promoted-channel-${{ github.run_id }}
+          path: promoted
+      - name: Apply and verify promoted manifest
+        run: |
+          install -m 0644 promoted/channels.json canonical/channels.json
+          install -m 0644 promoted/channels.json.gpg canonical/channels.json.gpg
+          python3 packaging/repository/verify_apt.py \
+            canonical "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
+      - name: Publish manifest with signature last
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_APT_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_APT_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_APT_ACCOUNT_ID }}
+        run: |
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          update_destination="s3://${RAVENSTASH_CLI_STORAGE_BUCKET}/${RAVENSTASH_CLI_NAMESPACE}"
+          destination="${update_destination}/apt"
+          aws s3 cp canonical/channels.json "$destination/channels.json" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors
+          aws s3 cp canonical/channels.json.gpg "$destination/channels.json.gpg" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors
+          aws s3 cp canonical/channels.json "$update_destination/channels.json" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors
+          aws s3 cp canonical/channels.json.gpg "$update_destination/channels.json.gpg" \
+            --endpoint-url "$endpoint" --cache-control no-cache --only-show-errors
+      - name: Verify exact public channel recommendation
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                --max-redirs 0 -fsS \
+                "$RAVENSTASH_CLI_CHANNELS_URL" \
+                --output public-channels.json \
+              && curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                --max-redirs 0 -fsS \
+                "${RAVENSTASH_CLI_CHANNELS_URL}.gpg" \
+                --output public-channels.json.gpg \
+              && gpgv \
+                --keyring "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}" \
+                public-channels.json.gpg public-channels.json \
+              && python3 -c \
+                'import json, pathlib, sys; assert json.loads(pathlib.Path(sys.argv[1]).read_text())["recommended"] == sys.argv[2]' \
+                public-channels.json "$CHANNEL"; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 5 ]]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Public channel manifest did not converge"
+          exit 1
+
+  deploy-installer:
+    name: Deploy and verify promoted installer
+    needs:
+      - publish-update-manifest
+      - sign-channel-manifest
+    if: >-
+      ${{ always() && inputs.kind == 'stable' &&
+          needs.sign-channel-manifest.result == 'success' &&
+          needs.publish-update-manifest.result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: installer-delivery
+    steps:
+      - name: Check out installer delivery policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check out exact release source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          path: release-source
+
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+
+      - name: Install pinned Sigstore verifier
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.0.6
+
+      - name: Materialize pinned GPG keyring
+        run: packaging/repository/prepare_keyring.sh
+
+      - name: Download the immutable published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$SOURCE_BRANCH" = main
+          test "$(git -C release-source rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C release-source merge-base --is-ancestor \
+            "$SOURCE_SHA" "refs/remotes/origin/${SOURCE_BRANCH}"
+          python3 release-source/packaging/repository/channel_policy.py \
+            validate "$VERSION" "$CHANNEL"
+          test "$(sed -n 's/^version = "\([^"]*\)"/\1/p' release-source/pyproject.toml)" = "$VERSION"
+          grep -Fx "readonly release_version=\"${VERSION}\"" \
+            release-source/packaging/install.sh
+          grep -Fx "readonly compatibility_channel=\"${CHANNEL}\"" \
+            release-source/packaging/install.sh
+
+          tag="v${VERSION}"
+          test "$(
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json targetCommitish --jq .targetCommitish
+          )" = "$SOURCE_SHA"
+          test "$(
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft --jq .isDraft
+          )" = false
+          test "$(
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json isPrerelease --jq .isPrerelease
+          )" = false
+
+          gh release view "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name' \
+            | sort > release-assets.txt
+          stem="$RAVENSTASH_CLI_ASSET_STEM"
+          mkdir release-build
+          gh release download "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-build \
+            --pattern "${stem}-install.*" \
+            --pattern "${stem}-source-identity.txt" \
+            --pattern "${stem}-v${VERSION}-checksums*"
+
+      - name: Authenticate the exact published installer
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          CURRENT_RELEASE_SIGNER: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main
+        run: |
+          stem="$RAVENSTASH_CLI_ASSET_STEM"
+          checksums="${stem}-v${VERSION}-checksums.txt"
+          source_identity="release-build/${stem}-source-identity.txt"
+          awk '
+            NF != 2 || $1 !~ /^[0-9a-f]{64}$/ || $2 ~ /(^|\/)\.\.?(\/|$)/ || $2 ~ /\// { exit 1 }
+            { print $2 }
+          ' "release-build/${checksums}" \
+            > checksummed-assets.txt
+          printf '%s\n' \
+            "${checksums%.txt}.sigstore.json" \
+            "${checksums}" \
+            "${checksums}.asc" \
+            >> checksummed-assets.txt
+          sort checksummed-assets.txt > expected-assets.txt
+          cmp expected-assets.txt release-assets.txt
+
+          cosign verify-blob \
+            --bundle "release-build/${checksums%.txt}.sigstore.json" \
+            --certificate-identity "$CURRENT_RELEASE_SIGNER" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "release-build/${checksums}"
+          gpgv \
+            --keyring "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}" \
+            "release-build/${checksums}.asc" \
+            "release-build/${checksums}"
+          (
+            cd release-build
+            grep -E "  ${stem}-(install\.sh|install\.ps1|source-identity\.txt)\$" \
+              "$checksums" \
+              | sha256sum --check --strict
+          )
+          grep -Fx "source_repository=${GITHUB_REPOSITORY}" "$source_identity"
+          grep -Fx "source_sha=${SOURCE_SHA}" "$source_identity"
+          grep -Fx "version=${VERSION}" "$source_identity"
+          grep -Fx "channel=${CHANNEL}" "$source_identity"
+          grep -Fx "release_run_id=${GITHUB_RUN_ID}" "$source_identity"
+          grep -Fx 'release_workflow=.github/workflows/release.yml' \
+            "$source_identity"
+          cmp release-source/packaging/install.sh "release-build/${stem}-install.sh"
+          bash -n "release-build/${stem}-install.sh"
+          cmp release-source/packaging/install.ps1 "release-build/${stem}-install.ps1"
+
+      - name: Refuse an installer rollback
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --max-redirs 0 -fsS \
+            https://ravenstash.com/install.sh \
+            --output current-install.sh
+          bash -n current-install.sh
+          current_version="$(
+            sed -n 's/^readonly release_version="\([^"]*\)"/\1/p' \
+              current-install.sh
+          )"
+          test -n "$current_version"
+          dpkg --compare-versions "$VERSION" ge "$current_version"
+
+      - name: Install and validate the dedicated installer Worker
+        run: |
+          install -m 0644 "release-build/${RAVENSTASH_CLI_ASSET_STEM}-install.sh" \
+            packaging/installer-worker/src/install.sh
+          install -m 0644 "release-build/${RAVENSTASH_CLI_ASSET_STEM}-install.ps1" \
+            packaging/installer-worker/src/install.ps1
+          cd packaging/installer-worker
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+          npm test
+          npm run check
+
+      - name: Deploy the validated installer Worker
+        working-directory: packaging/installer-worker
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run deploy
+
+      - name: Verify exact live bytes and security headers
+        env:
+          EXPECTED_INSTALLER: release-build/${{ env.RAVENSTASH_CLI_ASSET_STEM }}-install.sh
+          EXPECTED_WINDOWS_INSTALLER: release-build/${{ env.RAVENSTASH_CLI_ASSET_STEM }}-install.ps1
+        run: |
+          for attempt in {1..60}; do
+            if curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                --max-redirs 0 -fsS \
+                --dump-header installer-headers.txt \
+                https://ravenstash.com/install.sh \
+                --output live-install.sh \
+              && cmp "$EXPECTED_INSTALLER" live-install.sh \
+              && bash -n live-install.sh \
+              && grep -Eiq '^content-type: text/plain([;[:space:]]|$)' installer-headers.txt \
+              && grep -Eiq '^cache-control: no-store' installer-headers.txt \
+              && grep -Eiq '^strict-transport-security: max-age=31536000; includeSubDomains' installer-headers.txt \
+              && grep -Eiq '^x-content-type-options: nosniff' installer-headers.txt; then
+              if curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                  --max-redirs 0 -fsS \
+                  --dump-header windows-installer-headers.txt \
+                  https://ravenstash.com/install.ps1 \
+                  --output live-install.ps1 \
+                && cmp "$EXPECTED_WINDOWS_INSTALLER" live-install.ps1 \
+                && grep -Eiq '^content-type: text/plain([;[:space:]]|$)' windows-installer-headers.txt \
+                && grep -Eiq '^cache-control: no-store' windows-installer-headers.txt \
+                && grep -Eiq '^strict-transport-security: max-age=31536000; includeSubDomains' windows-installer-headers.txt \
+                && grep -Eiq '^x-content-type-options: nosniff' windows-installer-headers.txt; then
+                exit 0
+              fi
+            fi
+            if [[ "$attempt" -lt 60 ]]; then
+              sleep 5
+            fi
+          done
+          echo "::error::Live installer did not converge to the promoted bytes and headers"
+          exit 1
+
+
+  cleanup-artifacts:
+    name: Remove successful release handoffs
+    needs:
+      - publish-github-release
+      - publish-channel-manifest
+    if: >-
+      ${{ always() && needs.publish-github-release.result == 'success' &&
+          (inputs.kind == 'candidate' ||
+           needs.publish-channel-manifest.result == 'success') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete current-run handoffs
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[].id' \
+            | while read -r artifact_id; do
+                gh api --method DELETE \
+                  "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+              done

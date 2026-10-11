@@ -1,0 +1,281 @@
+name: test-build
+run-name: Test build · v${{ inputs.base_version }}.dev · ${{ inputs.target }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit to build from this repository
+        type: string
+        required: true
+      base_version:
+        description: Intended next stable X.Y.Z version used to order the test build
+        type: string
+        required: true
+      target:
+        description: Build one target for quick testing, or all release targets
+        type: choice
+        options:
+          - linux-glibc-amd64
+          - linux-glibc-arm64
+          - linux-musl-amd64
+          - linux-musl-arm64
+          - macos-arm64
+          - macos-amd64
+          - windows-amd64
+          - windows-arm64
+          - all
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-build-${{ inputs.source_sha }}-${{ inputs.base_version }}-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare test-build identity
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate source and derive traceable version
+        id: identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_VERSION: ${{ inputs.base_version }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          version="$(
+            python3 packaging/scripts/prepare_test_build.py derive \
+              "$BASE_VERSION" "$SOURCE_SHA" "$GITHUB_RUN_ID"
+          )"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Test build"
+            echo
+            echo "- Source: \`$SOURCE_SHA\`"
+            echo "- Version: \`$version\`"
+            echo "- Target selection: \`${{ inputs.target }}\`"
+            echo "- Retention: 7 days"
+            echo
+            echo "This run creates expiring GitHub Actions artifacts only. It does not tag, sign, publish, or modify APT."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  linux-glibc-amd64:
+    name: Build · Linux glibc · amd64
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'linux-glibc-amd64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: linux-glibc-amd64
+      runner: ubuntu-24.04
+      kind: glibc
+      architecture: amd64
+      include_metadata: true
+      artifact_paths: |
+        dist/release/ravenstash-cli_${{ needs.prepare.outputs.version }}_amd64.deb
+        dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-linux-amd64.tar.gz
+
+  linux-glibc-arm64:
+    name: Build · Linux glibc · arm64
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'linux-glibc-arm64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: linux-glibc-arm64
+      runner: ubuntu-24.04-arm
+      kind: glibc
+      architecture: arm64
+      artifact_paths: |
+        dist/release/ravenstash-cli_${{ needs.prepare.outputs.version }}_arm64.deb
+        dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-linux-arm64.tar.gz
+
+  linux-musl-amd64:
+    name: Build · Linux musl · amd64
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'linux-musl-amd64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: linux-musl-amd64
+      runner: ubuntu-24.04
+      kind: musl
+      architecture: amd64
+      artifact_paths: dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-linux-musl-amd64.tar.gz
+
+  linux-musl-arm64:
+    name: Build · Linux musl · arm64
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'linux-musl-arm64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: linux-musl-arm64
+      runner: ubuntu-24.04-arm
+      kind: musl
+      architecture: arm64
+      artifact_paths: dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-linux-musl-arm64.tar.gz
+
+  macos-arm64:
+    name: Build · macOS · Apple Silicon
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'macos-arm64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: macos-arm64
+      runner: macos-14
+      kind: portable
+      architecture: arm64
+      artifact_paths: dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-macos-arm64.tar.gz
+
+  macos-amd64:
+    name: Build · macOS · Intel
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'macos-amd64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: macos-amd64
+      runner: macos-15-intel
+      kind: portable
+      architecture: amd64
+      artifact_paths: dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-macos-amd64.tar.gz
+
+  windows-amd64:
+    name: Build · Windows · x64
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'windows-amd64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: windows-amd64
+      runner: windows-2022
+      kind: portable
+      architecture: amd64
+      artifact_paths: dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-windows-amd64.zip
+
+  windows-arm64:
+    name: Build · Windows · ARM64
+    needs: prepare
+    if: inputs.target == 'all' || inputs.target == 'windows-arm64'
+    uses: ./.github/workflows/_build-release-target.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      version_override: ${{ needs.prepare.outputs.version }}
+      artifact_prefix: ravenstash-cli-test-target
+      target: windows-arm64
+      runner: windows-11-arm
+      kind: portable
+      architecture: arm64
+      artifact_paths: dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-windows-arm64.zip
+
+  assemble:
+    name: Assemble expiring test build
+    if: ${{ always() && needs.prepare.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs:
+      - prepare
+      - linux-glibc-amd64
+      - linux-glibc-arm64
+      - linux-musl-amd64
+      - linux-musl-arm64
+      - macos-arm64
+      - macos-amd64
+      - windows-amd64
+      - windows-arm64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download selected target handoffs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ravenstash-cli-test-target-*-${{ inputs.source_sha }}
+          path: build/targets
+          merge-multiple: true
+      - name: Assemble traceable inventory
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET_SELECTION: ${{ inputs.target }}
+        run: |
+          install -d build/test
+          while IFS= read -r -d '' source; do
+            filename="$(basename "$source")"
+            test ! -e "build/test/$filename"
+            install -m 0644 "$source" "build/test/$filename"
+          done < <(find build/targets -type f -print0)
+          test -n "$(find build/test -type f -print -quit)"
+          printf '%s\n' \
+            "source_repository=${GITHUB_REPOSITORY}" \
+            "source_sha=${SOURCE_SHA}" \
+            "version=${VERSION}" \
+            "target_selection=${TARGET_SELECTION}" \
+            "test_build_run_id=${GITHUB_RUN_ID}" \
+            "test_build_run_attempt=${GITHUB_RUN_ATTEMPT}" \
+            "test_build_workflow=.github/workflows/test-build.yml" \
+            "expires_after_days=7" \
+            > build/test/source-identity.txt
+          printf '%s\n' \
+            "This is an unsigned, expiring test build, not a Ravenstash release." \
+            "Install a downloaded Debian package with: sudo apt install ./ravenstash-cli_${VERSION}_ARCH.deb" \
+            "Remove or replace it with a signed stable/candidate build after testing." \
+            > build/test/TEST-BUILD.txt
+          (
+            cd build/test
+            find . -maxdepth 1 -type f ! -name '*-checksums.txt' -printf '%f\n' \
+              | LC_ALL=C sort | xargs sha256sum > "ravenstash-cli-v${VERSION}-checksums.txt"
+          )
+      - name: Upload expiring test-build inventory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ravenstash-cli-test-build-${{ needs.prepare.outputs.version }}-${{ inputs.target }}-${{ github.run_attempt }}
+          path: build/test/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Show download command
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          artifact="ravenstash-cli-test-build-${VERSION}-${{ inputs.target }}-${GITHUB_RUN_ATTEMPT}"
+          {
+            echo
+            echo "### Download"
+            echo
+            echo '```bash'
+            echo "gh run download ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --name '$artifact'"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

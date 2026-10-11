@@ -1,0 +1,314 @@
+name: ci
+run-name: "${{ github.event_name == 'pull_request' && format('CI · PR #{0} · {1}', github.event.pull_request.number, github.event.pull_request.title) || github.event_name == 'workflow_dispatch' && format('CI · Manual · {0}', github.ref_name) || format('CI · Push · {0}', github.ref_name) }}"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Select affected checks
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    outputs:
+      quality: ${{ steps.select.outputs.quality }}
+      platform: ${{ steps.select.outputs.platform }}
+      package: ${{ steps.select.outputs.package }}
+      policy: ${{ steps.select.outputs.policy }}
+      nix: ${{ steps.select.outputs.nix }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select checks from the changed paths
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # The test suite includes repository-wide policy checks over every
+          # tracked file, so it runs for every change regardless of its paths.
+          quality=true
+          platform=false
+          package=false
+          policy=false
+          nix=false
+
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            changed_files="__all__"
+          elif [[ "$EVENT_NAME" == pull_request ]]; then
+            changed_files="$(git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA")"
+          elif [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+            changed_files="$(git ls-files)"
+          else
+            changed_files="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")"
+          fi
+
+          while IFS= read -r path; do
+            case "$path" in
+              __all__)
+                platform=true
+                package=true
+                policy=true
+                nix=true
+                ;;
+              rvs/*|tests/*)
+                platform=true
+                package=true
+                ;;
+              pyproject.toml|uv.lock)
+                platform=true
+                package=true
+                nix=true
+                ;;
+              packaging/identity.env|packaging/scripts/*|packaging/pyinstaller/*|packaging/Dockerfile.ubuntu20)
+                package=true
+                policy=true
+                ;;
+              packaging/repository/*|packaging/install.sh|packaging/install.ps1|packaging/installer-worker/*)
+                policy=true
+                ;;
+              .github/*)
+                policy=true
+                ;;
+              flake.nix|flake.lock)
+                nix=true
+                ;;
+              README.md|LICENSE|NOTICE)
+                package=true
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          {
+            echo "quality=$quality"
+            echo "platform=$platform"
+            echo "package=$package"
+            echo "policy=$policy"
+            echo "nix=$nix"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  quality:
+    name: Python quality
+    needs: changes
+    if: needs.changes.outputs.quality == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.11.24"
+          enable-cache: true
+          save-cache: ${{ github.event_name != 'pull_request' }}
+          cache-dependency-glob: uv.lock
+      - name: Test and lint once
+        run: |
+          uv sync --frozen --python 3.14
+          uv run coverage run -m pytest
+          uv run coverage report
+          uv run ruff format --check rvs tests packaging/repository packaging/scripts
+          uv run ruff check rvs tests packaging/repository packaging/scripts
+          uv run pyright
+
+  platform-tests:
+    name: Source · ${{ matrix.name }}
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+          - name: macOS Apple Silicon
+            runner: macos-14
+          - name: macOS Intel
+            runner: macos-15-intel
+          - name: Windows x64
+            runner: windows-2022
+          - name: Windows ARM64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          version: "0.11.24"
+          enable-cache: true
+          save-cache: ${{ github.event_name != 'pull_request' }}
+          cache-dependency-glob: uv.lock
+      - name: Test source on the native platform
+        shell: bash
+        run: |
+          uv sync --frozen --python 3.14
+          uv run pytest
+
+  package-smoke:
+    name: Package · Ubuntu 20.04 baseline
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Load release identity
+        run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
+      - name: Build in the pinned Ubuntu 20.04 environment
+        run: packaging/scripts/build-in-ubuntu20.sh
+      - name: Install and exercise the Debian package
+        run: |
+          docker run --rm \
+            --env RAVENSTASH_CLI_PACKAGE \
+            --volume "$PWD/dist/release:/release:ro" \
+            ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214 \
+            /bin/bash -euc '
+              sed -i \
+                -e "s|http://archive.ubuntu.com/ubuntu/|http://azure.archive.ubuntu.com/ubuntu/|g" \
+                -e "s|http://security.ubuntu.com/ubuntu/|http://azure.archive.ubuntu.com/ubuntu/|g" \
+                /etc/apt/sources.list
+              apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update
+              apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install --yes /release/${RAVENSTASH_CLI_PACKAGE}_*_amd64.deb
+              rvs --version
+              rvs --help >/dev/null
+              ravenstash --version
+              test -x /usr/bin/docker-credential-rvs
+              test -e "/usr/lib/${RAVENSTASH_CLI_PACKAGE}/_internal/libpython3.14.so.1.0"
+            '
+
+  release-policy:
+    name: Workflow and release policy
+    needs: changes
+    if: needs.changes.outputs.policy == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release policy
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: packaging/installer-worker/package-lock.json
+      - name: Validate GitHub Actions policy
+        run: |
+          docker run --rm \
+            --volume "$PWD:/repo:ro" \
+            --workdir /repo \
+            rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9
+      - name: Validate shell and Python policy tools
+        run: |
+          shellcheck \
+            packaging/repository/*.sh \
+            packaging/install.sh \
+            packaging/scripts/common.sh
+          bash -n packaging/repository/*.sh packaging/install.sh packaging/scripts/*.sh
+          python3 -m compileall -q packaging/repository packaging/scripts
+          python3 -m unittest discover -s packaging/repository/tests
+      - name: Validate pinned APT public key
+        run: packaging/repository/prepare_keyring.sh
+      - name: Validate installer Worker without deployment credentials
+        working-directory: packaging/installer-worker
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=high
+          npm test
+          install -m 0644 ../install.sh src/install.sh
+          npm run check
+
+  nix:
+    name: Nix package · x86_64-linux
+    needs: changes
+    if: needs.changes.outputs.nix == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@526118121621777ccd86f79b04685a9319637641
+      - name: Evaluate all targets and build the native package
+        run: |
+          nix flake show --all-systems --no-write-lock-file
+          nix flake check --no-write-lock-file
+          nix build .#packages.x86_64-linux.default --no-write-lock-file
+          ./result/bin/rvs --version
+          ./result/bin/rvs --help >/dev/null
+          test "$(./result/bin/ravenstash --version)" = "$(./result/bin/rvs --version)"
+          test -x ./result/bin/docker-credential-rvs
+
+  secret-scan:
+    name: Secret scan
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the complete history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan every commit for secrets
+        run: |
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --env GIT_CONFIG_COUNT=1 \
+            --env GIT_CONFIG_KEY_0=safe.directory \
+            --env GIT_CONFIG_VALUE_0=/repo \
+            --volume "$PWD:/repo:ro" \
+            ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055 \
+            git /repo --config /repo/.gitleaks.toml --no-banner --redact
+
+  gate:
+    name: CI gate
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    needs: [changes, quality, platform-tests, package-smoke, release-policy, nix, secret-scan]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every selected check
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          PLATFORM_RESULT: ${{ needs.platform-tests.result }}
+          PACKAGE_RESULT: ${{ needs.package-smoke.result }}
+          POLICY_RESULT: ${{ needs.release-policy.result }}
+          NIX_RESULT: ${{ needs.nix.result }}
+          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          test "$QUALITY_RESULT" = success
+          test "$SECRET_SCAN_RESULT" = success
+          for result in \
+            "$PLATFORM_RESULT" \
+            "$PACKAGE_RESULT" \
+            "$POLICY_RESULT" \
+            "$NIX_RESULT"; do
+            [[ "$result" == success || "$result" == skipped ]]
+          done
