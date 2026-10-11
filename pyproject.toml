@@ -13,14 +13,14 @@ authors = [{ name = "Ravenstash", email = "support@ravenstash.com" }]
 keywords = ["ravenstash", "cli", "package-repository", "pypi", "npm", "maven", "oci", "helm"]
 requires-python = ">=3.14"
 dependencies = [
-    "typer==0.27.2",
-    "click==8.3.3",
-    "httpx2==2.13.0",
+    "typer==0.27.3",
+    "click==8.5.0",
+    "httpx2==2.13.1",
     "rich==15.0.0",
     "tomli-w==1.2.0",
     "keyring==25.7.0",
-    "cryptography==50.0.1; sys_platform != 'win32'",
-    "idna==3.19",
+    "cryptography==50.0.2; sys_platform != 'win32'",
+    "idna==3.20",
     "pyyaml==6.0.3",
     "packaging==26.3",
 ]
@@ -46,14 +46,14 @@ docker-credential-rvs = "rvs.oci.credential_helper:main"
 
 [dependency-groups]
 dev = [
-    "ruff==0.16.7",
+    "ruff==0.16.10",
     "pyright==1.1.414",
     "pytest==9.1.1",
     "httpx2-pytest==2.0.0",
     "coverage==7.16.2",
 ]
 release = [
-    "cyclonedx-bom==7.4.0",
+    "cyclonedx-bom==7.5.0",
     "pyinstaller==6.22.3",
 ]
 
