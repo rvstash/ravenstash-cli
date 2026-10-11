@@ -1,0 +1,4 @@
+config_version = 6
+
+[profiles.work]
+api_url = "https://api.work.example.test"

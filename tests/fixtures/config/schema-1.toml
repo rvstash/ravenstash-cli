@@ -1,0 +1,84 @@
+schema_version = 1
+default_profile = "work"
+credential_store = "vault"
+
+[profiles.default]
+api_url = "https://api.example.test"
+
+[profiles.default.native_registries.pypi]
+read_base_url = "https://pypi.packages.example.test"
+push_base_url = "https://push.pypi.packages.example.test"
+mirror_base_url = "https://mirror.pypi.packages.example.test"
+
+[profiles.default.native_registries.npm]
+read_base_url = "https://npm.packages.example.test"
+push_base_url = "https://push.npm.packages.example.test"
+mirror_base_url = "https://mirror.npm.packages.example.test"
+
+[profiles.default.native_registries.maven]
+read_base_url = "https://maven.packages.example.test"
+push_base_url = "https://push.maven.packages.example.test"
+mirror_base_url = "https://mirror.maven.packages.example.test"
+
+[profiles.default.native_registries.oci]
+registry_base_url = "https://oci.packages.example.test"
+
+[profiles.work]
+api_url = "https://api.work.example.test"
+repository_domain = "work.example.test"
+account_ref = "ac_fake2222"
+credential_store = "vault"
+credential_type = "expiring"
+credential_api_url = "https://api.work.example.test"
+expires_at = "2099-01-01T00:00:00+00:00"
+refresh_expires_at = "2099-01-02T00:00:00+00:00"
+active_account_ref = "ac_fake3333"
+
+[profiles.work.native_registries.pypi]
+read_base_url = "https://pypi.work.example.test"
+push_base_url = "https://push.pypi.work.example.test"
+mirror_base_url = "https://mirror.pypi.work.example.test"
+
+[profiles.work.native_registries.npm]
+read_base_url = "https://npm.work.example.test"
+push_base_url = "https://push.npm.work.example.test"
+mirror_base_url = "https://mirror.npm.work.example.test"
+
+[profiles.work.native_registries.maven]
+read_base_url = "https://maven.work.example.test"
+push_base_url = "https://push.maven.work.example.test"
+mirror_base_url = "https://mirror.maven.work.example.test"
+
+[profiles.work.native_registries.oci]
+registry_base_url = "https://oci.work.example.test"
+
+[profiles.work.accounts.ac_fake2222]
+account_type = "personal"
+account_handle = "example-user"
+
+[profiles.work.accounts.ac_fake2222.selected_target]
+target_type = "official_cache"
+account_ref = "ac_fake2222"
+stable_selector = "mirror:rc_fake6666"
+display_selector = "mirror:example-source"
+format = "pypi"
+remote_cache_ref = "rc_fake6666"
+remote_name_cache = "example-source"
+
+[profiles.work.accounts.ac_fake3333]
+account_type = "organization"
+account_handle = "example-org"
+organization_role = "admin"
+authority_revision = 7
+
+[profiles.work.accounts.ac_fake3333.selected_target]
+target_type = "repository"
+account_ref = "ac_fake3333"
+stable_selector = "in/ar_fake5555"
+display_selector = "repo:example-space/example-repo"
+format = "npm"
+namespace_realm = "internal"
+namespace_ref = "in_fake4444"
+namespace_name_cache = "example-space"
+repository_ref = "ar_fake5555"
+repository_name_cache = "example-repo"
