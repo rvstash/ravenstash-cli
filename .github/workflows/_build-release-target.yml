@@ -50,7 +50,7 @@ jobs:
     runs-on: ${{ inputs.runner }}
     steps:
       - name: Check out exact source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
@@ -61,7 +61,7 @@ jobs:
 
       - name: Set up pinned uv
         if: inputs.kind == 'portable'
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "0.11.24"
           enable-cache: true
@@ -147,7 +147,7 @@ jobs:
             '
 
       - name: Upload target-specific handoff
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.artifact_prefix }}-${{ inputs.target }}-${{ inputs.source_sha }}
           path: ${{ inputs.artifact_paths }}
@@ -157,7 +157,7 @@ jobs:
 
       - name: Upload canonical release metadata handoff
         if: inputs.include_metadata
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ inputs.artifact_prefix }}-metadata-${{ inputs.source_sha }}
           path: dist/release/${{ env.RAVENSTASH_CLI_ASSET_STEM }}-v${{ inputs.version }}-sbom.cdx.json

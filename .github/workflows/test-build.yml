@@ -42,7 +42,7 @@ jobs:
       version: ${{ steps.identity.outputs.version }}
     steps:
       - name: Check out exact source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
@@ -220,7 +220,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download selected target handoffs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: ravenstash-cli-test-target-*-${{ inputs.source_sha }}
           path: build/targets
@@ -259,7 +259,7 @@ jobs:
               | LC_ALL=C sort | xargs sha256sum > "ravenstash-cli-v${VERSION}-checksums.txt"
           )
       - name: Upload expiring test-build inventory
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ravenstash-cli-test-build-${{ needs.prepare.outputs.version }}-${{ inputs.target }}-${{ github.run_attempt }}
           path: build/test/*

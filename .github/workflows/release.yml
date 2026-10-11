@@ -45,7 +45,7 @@ jobs:
       contents: read
     steps:
       - name: Check out exact release source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
@@ -227,14 +227,14 @@ jobs:
       id-token: write
     steps:
       - name: Check out exact release source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
       - name: Load release identity
         run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
       - name: Download isolated target handoffs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: ${{ env.RAVENSTASH_CLI_PACKAGE }}-target-*-${{ inputs.source_sha }}
           path: build/targets
@@ -312,7 +312,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload immutable release inventory
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
           path: build/release/*
@@ -328,7 +328,7 @@ jobs:
     environment: apt-storage
     steps:
       - name: Check out publication policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Load release identity
@@ -361,7 +361,7 @@ jobs:
               prior "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
           fi
       - name: Upload authenticated prior state
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: authenticated-prior-apt-${{ github.run_id }}
           path: prior/
@@ -382,7 +382,7 @@ jobs:
       contents: read
     steps:
       - name: Check out signing policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Load release identity
@@ -398,13 +398,13 @@ jobs:
       - name: Materialize pinned trusted keyring
         run: packaging/repository/prepare_keyring.sh
       - name: Download immutable release inventory
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
           path: build
       - name: Download authenticated prior state
         if: inputs.kind == 'stable'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: authenticated-prior-apt-${{ github.run_id }}
           path: prior
@@ -497,7 +497,7 @@ jobs:
           rm -rf "$GNUPGHOME"
       - name: Upload signed APT handoff
         if: inputs.kind == 'stable'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: signed-apt-${{ github.run_id }}
           path: signed/
@@ -505,7 +505,7 @@ jobs:
           compression-level: 0
           retention-days: 1
       - name: Upload signed portable inventory
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: signed-portable-${{ github.run_id }}
           path: portable/
@@ -523,7 +523,7 @@ jobs:
       contents: read
     steps:
       - name: Check out publication policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Load release identity
@@ -536,7 +536,7 @@ jobs:
       - name: Materialize pinned trusted keyring
         run: packaging/repository/prepare_keyring.sh
       - name: Download signed APT handoff
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: signed-apt-${{ github.run_id }}
           path: signed
@@ -573,7 +573,7 @@ jobs:
       contents: read
     steps:
       - name: Check out repository trust policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Load release identity
@@ -625,18 +625,18 @@ jobs:
       contents: write
     steps:
       - name: Check out release repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Load release identity
         run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
       - name: Download immutable release inventory
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
           path: build
       - name: Download signed portable inventory
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: signed-portable-${{ github.run_id }}
           path: build
@@ -743,7 +743,7 @@ jobs:
       contents: read
     steps:
       - name: Check out publication policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Load release identity
@@ -756,7 +756,7 @@ jobs:
       - name: Materialize pinned trusted keyring
         run: packaging/repository/prepare_keyring.sh
       - name: Download signed release policy
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: signed-apt-${{ github.run_id }}
           path: signed
@@ -795,12 +795,12 @@ jobs:
       contents: read
     steps:
       - name: Check out promotion policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           fetch-depth: 0
       - name: Check out exact release source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
@@ -921,7 +921,7 @@ jobs:
           rm -f "$passphrase_file"
           rm -rf "$GNUPGHOME"
       - name: Upload bounded promotion handoff
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: promoted-channel-${{ github.run_id }}
           path: promoted/
@@ -940,7 +940,7 @@ jobs:
       contents: read
     steps:
       - name: Check out publication policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Load release identity
@@ -966,7 +966,7 @@ jobs:
           python3 packaging/repository/verify_apt.py \
             canonical "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
       - name: Download and authenticate promoted manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: promoted-channel-${{ github.run_id }}
           path: promoted
@@ -1035,13 +1035,13 @@ jobs:
     environment: installer-delivery
     steps:
       - name: Check out installer delivery policy
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Check out exact release source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
@@ -1052,7 +1052,7 @@ jobs:
         run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
 
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
 
