@@ -1,7 +1,7 @@
 # Ubuntu 20.04 is the oldest supported runtime target. Both image identities are
 # immutable, reviewed digests; updates change the digest only.
 FROM ghcr.io/astral-sh/uv@sha256:99ea34acedc870ba4ad11a1f540a1c04267c9f30aadc465a94406f52dfda2c36 AS uv
-FROM ubuntu@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+FROM ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
