@@ -234,7 +234,7 @@ jobs:
       - name: Load release identity
         run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
       - name: Download isolated target handoffs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: ${{ env.RAVENSTASH_CLI_PACKAGE }}-target-*-${{ inputs.source_sha }}
           path: build/targets
@@ -398,13 +398,13 @@ jobs:
       - name: Materialize pinned trusted keyring
         run: packaging/repository/prepare_keyring.sh
       - name: Download immutable release inventory
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
           path: build
       - name: Download authenticated prior state
         if: inputs.kind == 'stable'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: authenticated-prior-apt-${{ github.run_id }}
           path: prior
@@ -536,7 +536,7 @@ jobs:
       - name: Materialize pinned trusted keyring
         run: packaging/repository/prepare_keyring.sh
       - name: Download signed APT handoff
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: signed-apt-${{ github.run_id }}
           path: signed
@@ -631,12 +631,12 @@ jobs:
       - name: Load release identity
         run: grep -E '^[A-Z_]+=' packaging/identity.env >> "$GITHUB_ENV"
       - name: Download immutable release inventory
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ env.RAVENSTASH_CLI_PACKAGE }}-release-${{ inputs.source_sha }}
           path: build
       - name: Download signed portable inventory
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: signed-portable-${{ github.run_id }}
           path: build
@@ -756,7 +756,7 @@ jobs:
       - name: Materialize pinned trusted keyring
         run: packaging/repository/prepare_keyring.sh
       - name: Download signed release policy
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: signed-apt-${{ github.run_id }}
           path: signed
@@ -966,7 +966,7 @@ jobs:
           python3 packaging/repository/verify_apt.py \
             canonical "packaging/repository/keys/${RAVENSTASH_CLI_KEYRING}"
       - name: Download and authenticate promoted manifest
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: promoted-channel-${{ github.run_id }}
           path: promoted
