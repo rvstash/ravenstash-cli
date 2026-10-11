@@ -1,0 +1,132 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ravenstash-cli"
+version = "0.15.0.dev0"
+description = "Ravenstash CLI: the rvs command-line client for private package repositories"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Ravenstash", email = "support@ravenstash.com" }]
+keywords = ["ravenstash", "cli", "package-repository", "pypi", "npm", "maven", "oci", "helm"]
+requires-python = ">=3.14"
+dependencies = [
+    "typer==0.27.2",
+    "click==8.3.3",
+    "httpx2==2.13.0",
+    "rich==15.0.0",
+    "tomli-w==1.2.0",
+    "keyring==25.7.0",
+    "cryptography==50.0.1; sys_platform != 'win32'",
+    "idna==3.19",
+    "pyyaml==6.0.3",
+    "packaging==26.3",
+]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.urls]
+Homepage = "https://ravenstash.com"
+Repository = "https://github.com/rvstash/ravenstash-cli"
+Issues = "https://github.com/rvstash/ravenstash-cli/issues"
+Documentation = "https://docs.ravenstash.com/cli/overview/"
+Changelog = "https://github.com/rvstash/ravenstash-cli/blob/main/CHANGELOG.md"
+
+[project.scripts]
+rvs = "rvs.entrypoint:main"
+ravenstash = "rvs.entrypoint:main"
+docker-credential-rvs = "rvs.oci.credential_helper:main"
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.7",
+    "pyright==1.1.414",
+    "pytest==9.1.1",
+    "httpx2-pytest==2.0.0",
+    "coverage==7.16.2",
+]
+release = [
+    "cyclonedx-bom==7.4.0",
+    "pyinstaller==6.22.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rvs*"]
+
+[tool.setuptools.package-data]
+"rvs.resources" = ["ravenstash-cli.asc"]
+
+[tool.coverage.run]
+branch = true
+source = ["rvs"]
+
+[tool.coverage.report]
+# Branch-coverage floor enforced in CI; raise it as coverage grows.
+fail_under = 83
+skip_covered = true
+show_missing = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short -q"
+
+# ── Ruff ──────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["rvs"]
+include = ["**/*.py"]
+exclude = [".venv", "__pycache__", "*.egg-info"]
+show-fixes = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade (modern Python syntax)
+    "N",    # pep8-naming
+    "RUF",  # Ruff-specific rules
+    "TC",   # flake8-type-checking
+]
+ignore = [
+    "E501",  # line length (handled by formatter)
+    "B008",  # function-call in default args (common in typer)
+]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.flake8-type-checking]
+quote-annotations = false
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = true
+lines-after-imports = 2
+
+# ── Pyright ───────────────────────────────────────────────────────────────────
+
+[tool.pyright]
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+include = ["rvs"]
+exclude = [".venv", "*.egg-info"]
+typeCheckingMode = "basic"
