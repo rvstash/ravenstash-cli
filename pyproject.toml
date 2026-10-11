@@ -46,7 +46,7 @@ docker-credential-rvs = "rvs.oci.credential_helper:main"
 
 [dependency-groups]
 dev = [
-    "ruff==0.16.7",
+    "ruff==0.16.10",
     "pyright==1.1.414",
     "pytest==9.1.1",
     "httpx2-pytest==2.0.0",
