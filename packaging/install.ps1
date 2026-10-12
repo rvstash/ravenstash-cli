@@ -6,7 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ReleaseVersion = "0.15.0"
+$ReleaseVersion = "0.15.1"
 $CompatibilityChannel = "v0"
 # This script runs standalone, so it embeds the release identity that
 # packaging/identity.env defines; the test suite keeps the two in agreement.

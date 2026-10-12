@@ -6,6 +6,14 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-12
+
+### Changed
+
+- Updated the bundled libraries: Click 8.5.0, Typer 0.27.3, httpx2 2.13.1, cryptography 50.0.2, and idna 3.20. No command, option, or output changes.
+
+Detailed release notes: [Ravenstash CLI 0.15.1](docs/releases/0.15.1.md).
+
 ## [0.15.0] - 2026-10-11
 
 ### Added
@@ -23,5 +31,6 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 Detailed release notes: [Ravenstash CLI 0.15.0](docs/releases/0.15.0.md).
 
-[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.1
 [0.15.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.0
