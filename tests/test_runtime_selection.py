@@ -156,3 +156,25 @@ def test_tools_pip_cmd_exits_when_no_pip_is_available(monkeypatch, tmp_path: Pat
         tools.pip_cmd()
 
     assert exited.value.code == 1
+
+
+def test_tools_python_prefers_the_active_virtualenv(monkeypatch, tmp_path: Path) -> None:
+    venv = tmp_path / "venv"
+    interpreter = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    interpreter.parent.mkdir(parents=True)
+    interpreter.touch()
+    monkeypatch.setattr(python_rt, "RUNTIMES_DIR", tmp_path / "runtimes")
+    monkeypatch.setattr(tools.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.chdir(tmp_path)
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(venv))
+    assert tools.python() == str(interpreter)
+
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "missing"))
+    assert tools.python() == "/usr/bin/python"
+
+    monkeypatch.delenv("VIRTUAL_ENV")
+    monkeypatch.setattr(
+        tools.shutil, "which", lambda name: "/usr/bin/python3" if name == "python3" else None
+    )
+    assert tools.python() == "/usr/bin/python3"

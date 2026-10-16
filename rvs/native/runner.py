@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-NativeTool = Literal["pip", "uv", "twine", "npm", "mvn"]
+NativeTool = Literal["pip", "uv", "twine", "python", "npm", "mvn"]
 PackageOperation = Literal["read", "publish", "delete"]
 ConfigPolicy = Literal["respect", "override", "isolate"]
 
@@ -47,6 +47,9 @@ POLICIES: tuple[ConfigPolicy, ...] = ("respect", "override", "isolate")
 
 _ROUTER = CanonicalRouter()
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+# `rvs python` runs only pypa/build; other Python code never receives credentials.
+_BUILD_MODULE = ["-m", "build"]
+_NO_TARGET_ARGS = (["--version"], ["-V"], ["--help"], ["-h"], ["help"])
 
 
 @dataclass(frozen=True)
@@ -140,7 +143,7 @@ def run(tool: NativeTool, argv: list[str], options: NativeOptions) -> None:
     with tempfile.TemporaryDirectory(prefix="rvs-native-") as temp_dir:
         plan = _build_plan(tool, argv, options, Path(temp_dir))
         if plan.native_command:
-            warn_if_old(tool, list(plan.native_command))
+            warn_if_old("build" if tool == "python" else tool, list(plan.native_command))
         unpublishing = bool(plan.native_command) and tool == "npm" and _npm_is_unpublish(argv)
         if unpublishing:
             typer.echo(NATIVE_UNPUBLISH_NOTICE, err=True)
@@ -159,11 +162,15 @@ def _build_plan(
     temp_dir: Path,
 ) -> ExecutionPlan:
     env = child_environment()
+    native_args = _build_module_args(argv) if tool == "python" else argv
     command_prefix = _command_prefix_for(tool)
-    cmd = [*command_prefix, *argv]
+    if tool == "python":
+        command_prefix = [*command_prefix, *_BUILD_MODULE]
+    cmd = [*command_prefix, *native_args]
     native_arg_start = len(command_prefix)
-    # Help/version do not resolve packages and need no account or target.
-    if argv in (["--version"], ["-V"], ["--help"], ["-h"], ["help"]):
+    # Help/version do not resolve packages and need no account or target, and
+    # a build without isolation installs nothing.
+    if native_args in _NO_TARGET_ARGS or (tool == "python" and _build_is_unisolated(native_args)):
         return ExecutionPlan(cmd=cmd, env=env, native_command=())
     kind = _kind_for_tool(tool)
     account_ref = _selected_account_ref(options)
@@ -208,13 +215,30 @@ def _command_prefix_for(tool: NativeTool) -> list[str]:
             return [tools.require("uv", install_kind="system")]
         case "twine":
             return [tools.require("twine", install_kind="system")]
+        case "python":
+            return [tools.python()]
         case "mvn":
             return [tools.require("mvn", install_kind="system")]
 
 
+def _build_module_args(argv: list[str]) -> list[str]:
+    """Return pypa/build's own arguments, refusing any other Python invocation."""
+    if argv[: len(_BUILD_MODULE)] != _BUILD_MODULE:
+        output.fatal(
+            "rvs python only runs `python -m build`. Run other Python commands directly; "
+            "rvs does not pass Ravenstash access to them."
+        )
+    return argv[len(_BUILD_MODULE) :]
+
+
+def _build_is_unisolated(argv: list[str]) -> bool:
+    # Only exact spellings: a missed combined flag merely injects unused access.
+    return "--no-isolation" in argv or "-n" in argv
+
+
 def _kind_for_tool(tool: NativeTool) -> PackageFormat:
     match tool:
-        case "pip" | "uv" | "twine":
+        case "pip" | "uv" | "twine" | "python":
             return "pypi"
         case "npm":
             return "npm"
@@ -318,6 +342,7 @@ def _relevant_env_values(tool: NativeTool, env: dict[str, str]) -> list[str]:
         "pip": ("PIP_",),
         "uv": ("UV_", "NETRC"),
         "twine": ("TWINE_",),
+        "python": ("PIP_", "UV_", "NETRC"),
         "npm": ("NPM_CONFIG_", "npm_config_"),
         "mvn": ("MAVEN_",),
     }[tool]
@@ -351,6 +376,11 @@ def _candidate_config_files(
             if env.get("UV_CONFIG_FILE"):
                 candidates.append(Path(env["UV_CONFIG_FILE"]).expanduser())
             candidates.append(Path.home() / ".config/uv/uv.toml")
+        case "python":
+            # pypa/build installs build requirements with pip, or with uv when asked.
+            candidates.extend(_candidate_config_files("pip", argv, env))
+            if _arg_value(argv, "--installer") == "uv":
+                candidates.extend(_candidate_config_files("uv", argv, env))
         case "twine":
             config_file = _arg_value(argv, "--config-file")
             if config_file:
@@ -430,6 +460,8 @@ def _inject_override(
             )
         case "twine":
             _inject_twine_override(cmd, native_arg_start, env, route, token, isolate=isolate)
+        case "python":
+            _inject_build_override(env, route, token, temp_dir, isolate=isolate)
         case "npm":
             _inject_npm_override(
                 cmd,
@@ -523,6 +555,26 @@ def _inject_uv_override(
     if isolate:
         env["UV_NO_CONFIG"] = "1"
         env["UV_NO_ENV_FILE"] = "1"
+
+
+def _inject_build_override(
+    env: dict[str, str],
+    route: RegistryRoute,
+    token: str,
+    temp_dir: Path,
+    *,
+    isolate: bool,
+) -> None:
+    # pypa/build passes its environment to the pip or uv process that installs
+    # build requirements, so no argument changes are needed.
+    url = route.pypi_index_url
+    _write_netrc(env, [url], token, temp_dir)
+    env["PIP_INDEX_URL"] = url
+    env["UV_DEFAULT_INDEX"] = url
+    env["UV_INDEX_URL"] = url
+    if isolate:
+        env["PIP_CONFIG_FILE"] = os.devnull
+        env["UV_NO_CONFIG"] = "1"
 
 
 def _inject_twine_override(

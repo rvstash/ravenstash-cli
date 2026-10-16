@@ -35,7 +35,7 @@ Platform certification runs `rvs auth storage doctor` against the real credentia
 
 Python runtime installation selects python-build-standalone assets for Linux glibc, Linux musl, macOS, and Windows on both architectures. Java selects the corresponding Temurin build. Node.js supports the official Linux glibc, macOS, and Windows archives. On every musl system, including Alpine on amd64 and arm64, install Node.js through the system package manager or another version manager; `rvs` resolves it from `PATH`.
 
-Native pip, uv, twine, npm, Maven, Docker, Helm, and ORAS wrappers inherit terminal I/O and use temporary credentials. Windows uses native executable suffixes and command shims. If Windows policy prevents directory symlinks, the Docker context and plugin metadata are copied into the temporary overlay instead.
+Native pip, uv, twine, `python -m build`, npm, Maven, Docker, Helm, and ORAS wrappers inherit terminal I/O and use temporary credentials. Windows uses native executable suffixes and command shims. If Windows policy prevents directory symlinks, the Docker context and plugin metadata are copied into the temporary overlay instead.
 
 The wrappers favor broad compatibility and do not reject a native client because it is old. `rvs` warns below these advisory versions, then continues the command: pip 23.0, uv 0.4.30, Twine 4.0.2, npm 10.0, Maven 3.9.0, Docker 25.0.2, Helm 3.8.0, and ORAS 1.1.0. Version detection is best-effort; an unavailable, failed, timed-out, or unparseable probe does not block execution. The advisory levels identify clients that predate relevant protocol controls, maintained upstream lines, or security fixes.
 

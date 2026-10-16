@@ -148,6 +148,7 @@ def warn_additional_sources(
         "npm": ("package-lock.json", "npm-shrinkwrap.json", "package.json", ".npmrc"),
         "mvn": ("pom.xml",),
         "twine": (),
+        "python": (),
     }[tool]
     for parent in (base, *base.parents):
         files.extend(parent / name for name in names)

@@ -39,6 +39,7 @@ def test_root_help_exposes_clean_public_command_surface() -> None:
         "pip",
         "uv",
         "twine",
+        "python",
         "npm",
         "mvn",
         "auth",
@@ -57,7 +58,7 @@ def test_root_help_groups_commands_by_ecosystem() -> None:
     assert result.exit_code == 0
     help_output = unstyle(result.output)
     expected_panels = (
-        ("Python tools", ("pip", "twine", "uv")),
+        ("Python tools", ("pip", "python", "twine", "uv")),
         ("Node.js tools", ("npm",)),
         ("JVM tools", ("mvn",)),
         ("Container tools", ("docker", "oras")),

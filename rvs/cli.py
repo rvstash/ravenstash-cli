@@ -135,6 +135,12 @@ app.command(
     rich_help_panel=PYTHON_TOOLS_PANEL,
 )(native_commands.twine)
 app.command(
+    "python",
+    context_settings=native_commands.PASSTHROUGH_CONTEXT,
+    help="Run `python -m build` with temporary access to a Ravenstash PyPI repository.",
+    rich_help_panel=PYTHON_TOOLS_PANEL,
+)(native_commands.python)
+app.command(
     "npm",
     context_settings=native_commands.PASSTHROUGH_CONTEXT,
     help="Run npm with temporary access to a Ravenstash npm repository.",

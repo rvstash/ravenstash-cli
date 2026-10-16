@@ -71,8 +71,11 @@ Select the destination first:
 
 ```bash
 rvs art select platform/packages
+rvs python -m build
 rvs twine upload dist/*
 ```
+
+With uv, use `rvs uv build` and `rvs uv publish` instead.
 
 You can also publish with `rvs npm publish` or `rvs mvn deploy`. Ravenstash shows the destination and asks for confirmation before uploading.
 

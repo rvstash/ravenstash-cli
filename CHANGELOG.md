@@ -6,6 +6,10 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 ## [Unreleased]
 
+### Added
+
+- `rvs python -m build` runs pypa/build with temporary read access, so build requirements come from the selected repository. Pair it with `rvs twine upload dist/*`. Other Python commands are refused.
+
 ## [0.15.1] - 2026-10-12
 
 ### Changed

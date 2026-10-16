@@ -232,6 +232,7 @@ registry_base_url = "https://images.example.test"
 def _mock_native_tools(monkeypatch: Any) -> None:
     monkeypatch.setattr(native_runner.tools, "pip_cmd", lambda: ["/bin/pip"])
     monkeypatch.setattr(native_runner.tools, "npm", lambda: "/bin/npm")
+    monkeypatch.setattr(native_runner.tools, "python", lambda: "/bin/python")
     monkeypatch.setattr(
         native_runner.tools,
         "require",
@@ -285,6 +286,7 @@ def test_native_commands_request_only_the_operations_they_need() -> None:
     assert native_runner._operations_for("pip", ["install", "demo"]) == ("read",)
     assert native_runner._operations_for("uv", ["publish", "dist/demo.whl"]) == ("publish",)
     assert native_runner._operations_for("twine", ["upload", "dist/*"]) == ("publish",)
+    assert native_runner._operations_for("python", ["-m", "build"]) == ("read",)
     assert native_runner._operations_for("npm", ["ci"]) == ("read",)
     assert native_runner._operations_for("npm", ["publish"]) == ("publish",)
     # Publish never implies deletion: unpublish requests delete explicitly.
@@ -1069,6 +1071,126 @@ def test_native_uv_repo_override_sets_index_publish_env_and_netrc(
     assert not Path(calls[0]["env"]["NETRC"]).exists()
 
 
+def test_native_python_build_injects_read_access_for_pip_and_uv_installers(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    _isolate_config(monkeypatch, tmp_path)
+    _mock_native_tools(monkeypatch)
+    minted = _record_mints(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    netrc_texts: list[str] = []
+
+    def hook(_cmd: list[str], env: dict[str, str]) -> None:
+        netrc_texts.append(Path(env["NETRC"]).read_text(encoding="utf-8"))
+
+    _capture_run(monkeypatch, calls, hook)
+
+    result = runner.invoke(
+        app, ["python", "-m", "build", "--sdist", "--outdir", "out", "--installer", "uv", "."]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert minted == [["read"]]
+    assert calls[0]["cmd"] == [
+        "/bin/python",
+        "-m",
+        "build",
+        "--sdist",
+        "--outdir",
+        "out",
+        "--installer",
+        "uv",
+        ".",
+    ]
+    index_url = f"{PYPI_READ_URL}/in/ar_xyzabcde/simple/"
+    assert calls[0]["env"]["PIP_INDEX_URL"] == index_url
+    assert calls[0]["env"]["UV_DEFAULT_INDEX"] == index_url
+    assert calls[0]["env"]["UV_INDEX_URL"] == index_url
+    assert "PIP_CONFIG_FILE" not in calls[0]["env"]
+    assert "UV_NO_CONFIG" not in calls[0]["env"]
+    assert netrc_texts == [
+        f"machine {PYPI_READ_HOST} login __token__ password rvs_sltAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+    ]
+    assert not Path(calls[0]["env"]["NETRC"]).exists()
+
+
+def test_native_python_build_isolate_ignores_pip_and_uv_config(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    _isolate_config(monkeypatch, tmp_path)
+    _mock_native_tools(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    _capture_run(monkeypatch, calls)
+
+    result = runner.invoke(
+        app, ["python", "--rvs-native-config", "isolate", "-m", "build", "--wheel"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["cmd"] == ["/bin/python", "-m", "build", "--wheel"]
+    assert calls[0]["env"]["PIP_CONFIG_FILE"] == os.devnull
+    assert calls[0]["env"]["UV_NO_CONFIG"] == "1"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [],
+        ["script.py"],
+        ["-c", "print(1)"],
+        ["-m", "pip", "install", "demo"],
+        ["-I", "-m", "build"],
+        ["-m", "builder"],
+    ],
+)
+def test_native_python_refuses_anything_but_the_build_module(
+    monkeypatch: Any,
+    tmp_path: Path,
+    args: list[str],
+) -> None:
+    _isolate_config(monkeypatch, tmp_path)
+    _mock_native_tools(monkeypatch)
+    minted = _record_mints(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    _capture_run(monkeypatch, calls)
+
+    result = runner.invoke(app, ["python", *args])
+
+    assert result.exit_code != 0
+    assert "rvs python only runs `python -m build`" in result.output
+    assert minted == []
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["--version"], ["-h"], ["--no-isolation"], ["-n", "--wheel"]],
+)
+def test_native_python_build_without_installs_needs_no_target_or_access(
+    monkeypatch: Any,
+    tmp_path: Path,
+    args: list[str],
+) -> None:
+    _isolate_config(monkeypatch, tmp_path)
+    _mock_native_tools(monkeypatch)
+    cfg_mod.set_selected_artifact_target(None, profile="staging", account_ref="ac_23456789")
+    monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    monkeypatch.delenv("NETRC", raising=False)
+    minted = _record_mints(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    _capture_run(monkeypatch, calls)
+
+    result = runner.invoke(app, ["python", "-m", "build", *args])
+
+    assert result.exit_code == 0, result.output
+    assert minted == []
+    assert calls[0]["cmd"] == ["/bin/python", "-m", "build", *args]
+    assert "PIP_INDEX_URL" not in calls[0]["env"]
+    assert "NETRC" not in calls[0]["env"]
+
+
 def test_native_twine_repo_override_sets_ephemeral_upload_credentials(
     monkeypatch: Any,
     tmp_path: Path,
@@ -1240,6 +1362,7 @@ def test_native_maven_deploy_file_injects_upload_destination(
         ("npm", ["ci"]),
         ("mvn", ["verify"]),
         ("twine", ["upload", "dist/demo.whl"]),
+        ("python", ["-m", "build"]),
     ],
 )
 def test_missing_target_never_launches_or_infers_from_native_config(

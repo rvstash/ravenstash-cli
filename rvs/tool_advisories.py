@@ -37,6 +37,12 @@ ADVISORIES: dict[str, ToolAdvisory] = {
         ("--version",),
         "older Twine releases predate important upload and dependency compatibility fixes",
     ),
+    "build": ToolAdvisory(
+        (1, 0, 0),
+        "1.0",
+        ("--version",),
+        "older build releases are several years behind current packaging fixes",
+    ),
     "npm": ToolAdvisory(
         (10, 0, 0),
         "10.0",

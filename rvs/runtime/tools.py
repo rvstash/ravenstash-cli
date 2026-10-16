@@ -2,11 +2,7 @@
 
 import os
 import shutil
-from typing import TYPE_CHECKING
-
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 
 def _managed_node_dir() -> Path | None:
@@ -83,3 +79,14 @@ def pip_cmd() -> list[str]:
         return [pip_path]
     require("pip", install_kind="python")
     return ["pip"]
+
+
+def python() -> str:
+    """Return the interpreter that `python` runs here, preferring the active virtualenv."""
+    virtual_env = os.environ.get("VIRTUAL_ENV")
+    if virtual_env:
+        name = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+        candidate = Path(virtual_env) / name
+        if candidate.exists():
+            return str(candidate)
+    return resolve("python") or resolve("python3") or require("python", install_kind="python")
