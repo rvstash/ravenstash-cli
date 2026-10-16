@@ -1,21 +1,30 @@
 """Advisory native source discovery. Never edit inputs or fetch remote includes."""
 
 import json
-import os
+import re
 import shlex
 import tomllib
 import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+import yaml
+
 from .. import output
+from .pypi import requirement_includes
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
-    from .runner import NativeTool, RegistryRoute
+    from .adapter import NativeAdapter
+    from .common import RegistryRoute
+
+
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+# pnpm settings files: only these keys name registries.
+_PNPM_SETTING_KEYS = ("registry", "registries")
 
 
 def _strings(value: object) -> Iterator[str]:
@@ -75,6 +84,15 @@ def _file_sources(path: Path, seen: set[Path]) -> Iterator[str]:
                     "pip",
                 ):
                     yield from _strings(data.get(key, {}))
+        elif path.name == "pnpm-lock.yaml":
+            # Every URL in a pnpm lockfile (tarball, git repository, or specifier)
+            # is a source. Lockfiles can be large, so this one is scanned as text.
+            yield text
+        elif path.suffix == ".yaml":
+            data = yaml.safe_load(text)
+            if isinstance(data, dict):
+                for key in _PNPM_SETTING_KEYS:
+                    yield from _strings(data.get(key, {}))
         elif path.suffix == ".xml":
             root = ET.fromstring(text)
             for element in root.iter():
@@ -93,7 +111,7 @@ def _file_sources(path: Path, seen: set[Path]) -> Iterator[str]:
                 if not line or line.startswith(("#", ";")):
                     continue
                 # Requirements may recursively include other files. No network reads.
-                for include in _includes(shlex.split(line, comments=True)):
+                for include in requirement_includes(shlex.split(line, comments=True)):
                     if "://" not in include:
                         yield from _file_sources(path.parent / include, seen)
                 if path.name.endswith("npmrc"):
@@ -103,69 +121,31 @@ def _file_sources(path: Path, seen: set[Path]) -> Iterator[str]:
                     yield line
     except FileNotFoundError:
         return
-    except OSError, UnicodeError, ValueError, ET.ParseError, TypeError, AttributeError:
+    except (
+        OSError,
+        UnicodeError,
+        ValueError,
+        ET.ParseError,
+        TypeError,
+        AttributeError,
+        yaml.YAMLError,
+    ):
         output.warn("Could not inspect a native source file; the native tool will validate it.")
 
 
-def _includes(argv: list[str]) -> Iterator[str]:
-    for index, arg in enumerate(argv):
-        if arg in {"-r", "--requirement", "-c", "--constraint", "--build-constraint"}:
-            if index + 1 < len(argv):
-                yield argv[index + 1]
-        elif arg.startswith(("--requirement=", "--constraint=", "--build-constraint=")):
-            yield arg.split("=", 1)[1]
-        elif arg.startswith(("-r", "-c")) and len(arg) > 2 and not arg.startswith("--"):
-            yield arg[2:]
-
-
 def warn_additional_sources(
-    tool: NativeTool,
+    adapter: NativeAdapter,
     original_argv: list[str],
     argv: list[str],
     env: dict[str, str],
     route: RegistryRoute,
 ) -> None:
-    from .runner import (
-        _arg_value,
-        _candidate_config_files,
-        _extract_urls,
-        _relevant_env_values,
-        _same_origin,
-    )
-
-    texts = [" ".join(argv), *_relevant_env_values(tool, env)]
-    files = _candidate_config_files(tool, original_argv, env)
-    directory = _arg_value(original_argv, "--directory", "-C") if tool == "uv" else None
-    project = _arg_value(original_argv, "--project") if tool == "uv" else None
-    if tool == "npm":
-        directory = _arg_value(original_argv, "--prefix")
-    base = Path(directory or os.getcwd()).resolve()
-    if project:
-        base = (base / project).resolve()
-    names = {
-        "pip": (),
-        "uv": ("uv.lock", "uv.toml", "pyproject.toml"),
-        "npm": ("package-lock.json", "npm-shrinkwrap.json", "package.json", ".npmrc"),
-        "mvn": ("pom.xml",),
-        "twine": (),
-        "python": (),
-    }[tool]
+    texts = [" ".join(argv), *adapter.env_values(env)]
+    files = adapter.existing_config_files(original_argv, env)
+    base = adapter.project_dir(original_argv)
     for parent in (base, *base.parents):
-        files.extend(parent / name for name in names)
-    if tool in {"pip", "uv"}:
-        files.extend(base / name for name in _includes(original_argv) if "://" not in name)
-    if tool == "uv":
-        config = _arg_value(original_argv, "--config-file")
-        if config:
-            files.append(base / config)
-    if tool == "mvn":
-        pom = _arg_value(original_argv, "--file", "-f")
-        if pom:
-            path = base / pom
-            files.append(path / "pom.xml" if path.is_dir() else path)
-        global_settings = _arg_value(original_argv, "--global-settings", "-gs")
-        if global_settings:
-            files.append(base / global_settings)
+        files.extend(parent / name for name in adapter.project_files)
+    files.extend(adapter.extra_source_files(original_argv, base))
     seen: set[Path] = set()
     for path in files:
         texts.extend(_file_sources(path, seen))
@@ -199,7 +179,26 @@ def warn_additional_sources(
             "Native configuration and lockfile rules still apply; direct downloads bypass "
             "this target's policy and accounting. Lockfiles are unchanged by rvs."
         )
-        if tool == "pip":
-            output.warn(
-                "pip combines candidates across indexes; extra indexes have no lower priority."
-            )
+        for note in adapter.source_notes():
+            output.warn(note)
+
+
+def _extract_urls(text: str) -> list[str]:
+    return [match.group(0).rstrip(".,);]") for match in _URL_RE.finditer(text)]
+
+
+def _same_origin(left: str, right: str) -> bool:
+    first = urlsplit(left)
+    second = urlsplit(right)
+    try:
+        return (
+            first.scheme.lower(),
+            first.hostname.rstrip(".").lower() if first.hostname else None,
+            first.port or (443 if first.scheme.lower() == "https" else 80),
+        ) == (
+            second.scheme.lower(),
+            second.hostname.rstrip(".").lower() if second.hostname else None,
+            second.port or (443 if second.scheme.lower() == "https" else 80),
+        )
+    except ValueError:
+        return False

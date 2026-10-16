@@ -15,11 +15,18 @@ NATIVE_UNPUBLISH_NOTICE = (
     "Unpublishing moves the version to the repository trash. "
     "Restore it in the web app before it is permanently deleted."
 )
-WHOLE_PACKAGE_UNPUBLISH_HINT = (
-    "If npm reported E405: unpublishing a whole package works only while it has one "
-    "version left. Use `rvs art package delete-version NAME VERSION` for one version, "
-    "or delete the package in the web app."
-)
+
+
+def whole_package_unpublish_hint(refusal: str) -> str:
+    """Explain a refused whole-package unpublish; *refusal* names how the client reports it."""
+    return (
+        f"If {refusal}: unpublishing a whole package works only while it has one "
+        "version left. Use `rvs art package delete-version NAME VERSION` for one version, "
+        "or delete the package in the web app."
+    )
+
+
+WHOLE_PACKAGE_UNPUBLISH_HINT = whole_package_unpublish_hint("npm reported E405")
 
 
 def moved_to_trash(subject: str, location: str) -> str:

@@ -9,6 +9,11 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 ### Added
 
 - `rvs python -m build` runs pypa/build with temporary read access, so build requirements come from the selected repository. Pair it with `rvs twine upload dist/*`. Other Python commands are refused.
+- `rvs pnpm` runs pnpm with temporary access to a Ravenstash npm repository, like `rvs npm`: installs read from the repository, and `publish` (including `pnpm -r publish`), `dist-tag`, `deprecate`, and `unpublish` use its publish address after the same confirmations. It works with pnpm 9 through 12, whose configuration channels differ, and the repository it selects takes precedence over a project `.npmrc` or `pnpm-workspace.yaml`. `rvs` warns when `package.json` pins another pnpm version, which pnpm would download from the selected repository, and when a pnpm lockfile or workspace setting names other sources. `rvs art native config pnpm` prints a manual setup.
+
+### Fixed
+
+- Old-client version checks run outside the project directory, so a `packageManager` pin no longer makes pnpm download another version just to report its own.
 
 ## [0.15.1] - 2026-10-12
 

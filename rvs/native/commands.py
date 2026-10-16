@@ -185,6 +185,33 @@ def npm(
     )
 
 
+def pnpm(
+    ctx: typer.Context,
+    rvs_yes: bool = typer.Option(False, "--rvs-yes", help="Skip publishing confirmation."),
+    rvs_profile: str | None = typer.Option(None, "--rvs-profile", help="Local CLI profile."),
+    rvs_target: str | None = typer.Option(
+        None, "--rvs-target", help="Repository or mirror for this command."
+    ),
+    rvs_account: str | None = typer.Option(None, "--rvs-account", help=_ACCOUNT_HELP),
+    rvs_account_ref: str | None = typer.Option(
+        None,
+        "--rvs-account-ref",
+        help="Typed account reference for advanced use.",
+        hidden=True,
+    ),
+    rvs_native_config: str = typer.Option(
+        _native_config_option(),
+        "--rvs-native-config",
+        help="Native config policy: respect, override, or isolate.",
+    ),
+) -> None:
+    _run(
+        "pnpm",
+        ctx,
+        _options(rvs_profile, rvs_target, rvs_account, rvs_account_ref, rvs_native_config, rvs_yes),
+    )
+
+
 def mvn(
     ctx: typer.Context,
     rvs_yes: bool = typer.Option(False, "--rvs-yes", help="Skip publishing confirmation."),

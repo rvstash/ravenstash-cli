@@ -1,5 +1,6 @@
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -8,6 +9,9 @@ from rvs import config as cfg_mod
 from rvs.cli import app
 from rvs.client import ApiClient
 from rvs.native import runner as native_runner
+from rvs.native.adapters import ADAPTERS
+from rvs.native.npm import NPM_GRAMMAR, spec_has_version
+from rvs.runtime import tools as runtime_tools
 from typer.testing import CliRunner
 
 
@@ -32,7 +36,7 @@ MAVEN_ID = "rvs-0123456789abcdef01234567"
 @pytest.fixture(autouse=True)
 def _fixed_maven_server_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin the per-run random Maven repository ID so settings can be asserted."""
-    monkeypatch.setattr(native_runner.secrets, "token_hex", lambda _size: MAVEN_ID[4:])
+    monkeypatch.setattr(secrets, "token_hex", lambda _size: MAVEN_ID[4:])
 
 
 PYPI_READ_HOST = "python-read.example.test"
@@ -230,11 +234,11 @@ registry_base_url = "https://images.example.test"
 
 
 def _mock_native_tools(monkeypatch: Any) -> None:
-    monkeypatch.setattr(native_runner.tools, "pip_cmd", lambda: ["/bin/pip"])
-    monkeypatch.setattr(native_runner.tools, "npm", lambda: "/bin/npm")
-    monkeypatch.setattr(native_runner.tools, "python", lambda: "/bin/python")
+    monkeypatch.setattr(runtime_tools, "pip_cmd", lambda: ["/bin/pip"])
+    monkeypatch.setattr(runtime_tools, "npm", lambda: "/bin/npm")
+    monkeypatch.setattr(runtime_tools, "python", lambda: "/bin/python")
     monkeypatch.setattr(
-        native_runner.tools,
+        runtime_tools,
         "require",
         lambda name, *, install_kind: f"/bin/{name}",
     )
@@ -340,7 +344,7 @@ def test_native_npm_operations_come_from_the_command_not_package_names() -> None
     )
     assert operations("npm", ["--workspace=pkg", "publish"]) == ("publish",)
     assert operations("npm", ["--tag", "unpublish", "install", "demo"]) == ("read",)
-    assert native_runner._npm_command(["--force"]) is None
+    assert NPM_GRAMMAR.command(["--force"]) is None
 
 
 def test_native_npm_respects_project_npmrc_and_injects_path_scoped_auth(
@@ -525,17 +529,17 @@ def test_native_npm_unpublish_mints_delete_authority_and_explains_refusals(
     ],
 )
 def test_npm_dist_tag_classifies_reads_and_changes_by_subcommand(argv) -> None:
-    assert native_runner._npm_dist_tag_action(argv) == "ls"
-    assert not native_runner._npm_is_mutation(argv)
+    assert NPM_GRAMMAR.dist_tag_action(argv) == "ls"
+    assert not NPM_GRAMMAR.is_mutation(argv)
     for subcommand in ("add", "a", "set", "s"):
         change = ["dist-tag", subcommand, "demo@1.0.0", "beta"]
-        assert native_runner._npm_dist_tag_action(change) == "add"
+        assert NPM_GRAMMAR.dist_tag_action(change) == "add"
         assert native_runner._operations_for("npm", change) == ("read", "publish")
     for subcommand in ("rm", "r", "del", "d", "remove"):
         change = ["dist-tag", subcommand, "demo", "beta"]
-        assert native_runner._npm_dist_tag_action(change) == "rm"
+        assert NPM_GRAMMAR.dist_tag_action(change) == "rm"
         assert native_runner._operations_for("npm", change) == ("read", "publish")
-    assert native_runner._npm_dist_tag_action(["install", "demo"]) is None
+    assert NPM_GRAMMAR.dist_tag_action(["install", "demo"]) is None
 
 
 def _record_mints(monkeypatch: Any) -> list[list[str]]:
@@ -665,21 +669,21 @@ def test_native_npm_dist_tag_additions_of_other_tags_are_not_confirmed(
     ],
 )
 def test_native_npm_dist_tag_spec_needs_a_version(spec: str, has_version: bool) -> None:
-    assert native_runner._npm_spec_has_version(spec) is has_version
+    assert spec_has_version(spec) is has_version
 
 
 def test_native_npm_dist_tag_default_tag_follows_npm_configuration() -> None:
     argv = ["dist-tag", "add", "demo@1.0.0"]
 
-    assert native_runner._npm_dist_tag_confirmation(argv, {}) is not None
-    assert native_runner._npm_dist_tag_confirmation(argv, {"NPM_CONFIG_TAG": "next"}) is None
-    assert native_runner._npm_dist_tag_confirmation(argv, {"npm_config_tag": "next"}) is None
-    assert native_runner._npm_dist_tag_confirmation(["install", "demo"], {}) is None
+    assert NPM_GRAMMAR.dist_tag_confirmation(argv, {}) is not None
+    assert NPM_GRAMMAR.dist_tag_confirmation(argv, {"NPM_CONFIG_TAG": "next"}) is None
+    assert NPM_GRAMMAR.dist_tag_confirmation(argv, {"npm_config_tag": "next"}) is None
+    assert NPM_GRAMMAR.dist_tag_confirmation(["install", "demo"], {}) is None
 
 
 def test_native_npm_dist_tag_removal_says_an_upstream_tag_may_take_over() -> None:
     # Removing the repository's tag uncovers an upstream's tag of the same name.
-    assert native_runner._npm_dist_tag_confirmation(["dist-tag", "rm", "demo", "beta"], {}) == (
+    assert NPM_GRAMMAR.dist_tag_confirmation(["dist-tag", "rm", "demo", "beta"], {}) == (
         "Remove npm dist-tag 'beta' from demo? Installs by this tag stop working "
         "unless an upstream supplies the same tag."
     )
@@ -1034,7 +1038,7 @@ def test_native_pip_preserves_multi_part_pip_command_prefix(
 ) -> None:
     _isolate_config(monkeypatch, tmp_path)
     _mock_native_tools(monkeypatch)
-    monkeypatch.setattr(native_runner.tools, "pip_cmd", lambda: ["/bin/python", "-m", "pip"])
+    monkeypatch.setattr(runtime_tools, "pip_cmd", lambda: ["/bin/python", "-m", "pip"])
     calls: list[dict[str, Any]] = []
     _capture_run(monkeypatch, calls)
 
@@ -1266,7 +1270,6 @@ def test_native_maven_read_only_mirror_uses_only_download_route(tmp_path: Path) 
         1,
         {},
         route,
-        route.package_token,
         tmp_path,
         isolate=True,
     )
@@ -1601,3 +1604,340 @@ def test_maven_repository_id_is_random_per_run(monkeypatch: pytest.MonkeyPatch) 
     assert first.maven_server_id.startswith("rvs-")
     assert len(first.maven_server_id) == len("rvs-") + 24
     assert "rvs-private" not in {first.maven_server_id, second.maven_server_id}
+
+
+SLT = "rvs_sltAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+NPM_READ_REGISTRY = f"{NPM_READ_URL}/in/ar_xyzabcde/"
+NPM_PUSH_REGISTRY = f"{NPM_PUSH_URL}/in/ar_xyzabcde/"
+NPM_READ_AUTH_KEY = f"//{NPM_READ_HOST}/in/ar_xyzabcde/:_authToken"
+NPM_PUSH_AUTH_KEY = f"//{NPM_PUSH_HOST}/in/ar_xyzabcde/:_authToken"
+
+
+def _pnpm_home(monkeypatch: Any, tmp_path: Path) -> Path:
+    """Give pnpm runs a private home so the developer's ~/.npmrc is never read."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    for name in ("NPM_CONFIG_USERCONFIG", "npm_config_userconfig"):
+        monkeypatch.delenv(name, raising=False)
+    return home
+
+
+def _run_pnpm(
+    monkeypatch: Any, tmp_path: Path, argv: list[str], **invoke: Any
+) -> tuple[Any, list[dict[str, Any]], list[str]]:
+    """Run `rvs pnpm` and capture the child command, environment, and user config."""
+    _isolate_config(monkeypatch, tmp_path)
+    _mock_native_tools(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    user_configs: list[str] = []
+
+    def hook(_cmd: list[str], env: dict[str, str]) -> None:
+        path = Path(env["NPM_CONFIG_USERCONFIG"])
+        assert oct(path.stat().st_mode & 0o777) == "0o600"
+        user_configs.append(path.read_text(encoding="utf-8"))
+
+    _capture_run(monkeypatch, calls, hook)
+    result = runner.invoke(app, ["pnpm", "--rvs-target", "staging/repo-npm", *argv], **invoke)
+    return result, calls, user_configs
+
+
+@pytest.mark.parametrize(
+    ("argv", "operations"),
+    [
+        (["install"], ("read",)),
+        (["add", "publish"], ("read",)),
+        (["exec", "npm", "publish"], ("read",)),
+        (["dlx", "create-vite"], ("read",)),
+        (["publish"], ("publish",)),
+        (["publish", "--no-git-checks"], ("publish",)),
+        (["-r", "publish"], ("publish",)),
+        (["--recursive", "publish", "--tag", "next"], ("publish",)),
+        # `--filter` takes a value, so it is not the command.
+        (["--filter", "publish", "install"], ("read",)),
+        (["-F", "app", "publish"], ("publish",)),
+        # pnpm's `-w` (workspace root) takes no value, unlike npm's `-w WORKSPACE`.
+        (["-w", "publish"], ("publish",)),
+        (["unpublish", "demo@1.0.0"], ("read", "publish", "delete")),
+        (["deprecate", "demo@1", "old"], ("read", "publish")),
+        (["undeprecate", "demo@1"], ("read", "publish")),
+        (["dist-tag", "add", "demo@1.0.0", "beta"], ("read", "publish")),
+        (["dist-tag", "rm", "demo", "beta"], ("read", "publish")),
+        (["dist-tag", "ls", "demo"], ("read",)),
+        (["dist-tags", "ls", "demo"], ("read",)),
+    ],
+)
+def test_pnpm_operations_come_from_the_command(argv, operations) -> None:
+    assert native_runner._operations_for("pnpm", argv) == operations
+    assert native_runner._is_publishing("pnpm", argv) is (operations == ("publish",))
+
+
+def test_pnpm_install_sets_both_variable_families_and_a_user_config(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    home = _pnpm_home(monkeypatch, tmp_path)
+    (home / ".npmrc").write_text(
+        "@vendor:registry=https://vendor.test/npm/\n"
+        f"{NPM_READ_AUTH_KEY}=stale-token\n"
+        "//vendor.test/npm/:_authToken=${VENDOR_TOKEN}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("npm_config_registry", "https://registry.npmjs.org/")
+    monkeypatch.setenv("pnpm_config_registry", "https://registry.npmjs.org/")
+
+    result, calls, user_configs = _run_pnpm(
+        monkeypatch,
+        tmp_path,
+        ["install", "--registry", "https://registry.npmjs.org/", "--frozen-lockfile"],
+    )
+
+    assert result.exit_code == 0, result.output
+    # The registry comes from the environment: an inserted `--registry` could
+    # land among the arguments `pnpm run` passes to a script.
+    assert calls[0]["cmd"] == ["/bin/pnpm", "install", "--frozen-lockfile"]
+    env = calls[0]["env"]
+    assert env["NPM_CONFIG_REGISTRY"] == NPM_READ_REGISTRY
+    assert env["PNPM_CONFIG_REGISTRY"] == NPM_READ_REGISTRY
+    assert env[f"NPM_CONFIG_{NPM_READ_AUTH_KEY}"] == SLT
+    assert env[f"PNPM_CONFIG_{NPM_READ_AUTH_KEY}"] == SLT
+    assert "npm_config_registry" not in env
+    assert "pnpm_config_registry" not in env
+    # pnpm 9, and pnpm 10 for a registry with a port, lose the variable form of
+    # the credential, so the user config carries it too and keeps everything else.
+    assert user_configs[0] == (
+        "@vendor:registry=https://vendor.test/npm/\n"
+        "//vendor.test/npm/:_authToken=${VENDOR_TOKEN}\n"
+        f"{NPM_READ_AUTH_KEY}={SLT}\n"
+    )
+    assert "stale-token" not in user_configs[0]
+    assert (home / ".npmrc").read_text(encoding="utf-8").count("stale-token") == 1
+    assert not Path(env["NPM_CONFIG_USERCONFIG"]).exists()
+    assert "--registry" not in calls[0]["cmd"]
+
+
+def test_pnpm_keeps_a_user_global_config_unless_isolated(monkeypatch: Any, tmp_path: Path) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("npm_config_globalconfig", str(tmp_path / "global.npmrc"))
+
+    result, calls, _ = _run_pnpm(monkeypatch, tmp_path, ["install"])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["env"]["npm_config_globalconfig"] == str(tmp_path / "global.npmrc")
+    assert "NPM_CONFIG_GLOBALCONFIG" not in calls[0]["env"]
+
+
+def test_pnpm_isolate_uses_only_the_injected_credential(monkeypatch: Any, tmp_path: Path) -> None:
+    home = _pnpm_home(monkeypatch, tmp_path)
+    (home / ".npmrc").write_text("registry=https://registry.npmjs.org/\n", encoding="utf-8")
+    monkeypatch.setenv("npm_config_globalconfig", str(tmp_path / "global.npmrc"))
+    global_texts: list[str] = []
+
+    result, calls, user_configs = _run_pnpm(
+        monkeypatch, tmp_path, ["--rvs-native-config", "isolate", "install"]
+    )
+    global_texts.append(Path(calls[0]["env"]["NPM_CONFIG_GLOBALCONFIG"]).name)
+
+    assert result.exit_code == 0, result.output
+    assert user_configs == [f"{NPM_READ_AUTH_KEY}={SLT}\n"]
+    assert "npm_config_globalconfig" not in calls[0]["env"]
+    assert global_texts == ["global.npmrc"]
+    assert calls[0]["env"]["NPM_CONFIG_GLOBALCONFIG"] != str(tmp_path / "global.npmrc")
+
+
+def test_pnpm_publish_uses_the_upload_registry_and_previews_the_package(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+    (tmp_path / "package.json").write_text(
+        json.dumps({"name": "@acme/widgets", "version": "1.2.3"}), encoding="utf-8"
+    )
+
+    result, calls, user_configs = _run_pnpm(
+        monkeypatch, tmp_path, ["publish", "--no-git-checks", "--tag", "next"], input="y\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Publish to repo:staging/repo (user:staging)" in result.output
+    assert "npm @acme/widgets@1.2.3" in result.output
+    assert "npm tag: next" in result.output
+    assert calls[0]["cmd"] == ["/bin/pnpm", "publish", "--no-git-checks", "--tag", "next"]
+    env = calls[0]["env"]
+    assert env["NPM_CONFIG_REGISTRY"] == env["PNPM_CONFIG_REGISTRY"] == NPM_PUSH_REGISTRY
+    assert env[f"PNPM_CONFIG_{NPM_PUSH_AUTH_KEY}"] == SLT
+    assert user_configs == [f"{NPM_PUSH_AUTH_KEY}={SLT}\n"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["-r", "publish"],
+        ["publish", "--recursive"],
+        ["--filter", "@acme/*", "publish"],
+        ["-C", "packages/app", "publish"],
+    ],
+)
+def test_pnpm_workspace_publish_leaves_selection_to_pnpm(
+    monkeypatch: Any, tmp_path: Path, argv
+) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+
+    result, calls, _ = _run_pnpm(monkeypatch, tmp_path, ["--rvs-yes", *argv])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["env"]["PNPM_CONFIG_REGISTRY"] == NPM_PUSH_REGISTRY
+    preview = ADAPTERS["pnpm"].publish_items(argv)
+    assert [item.identity for item in preview] == ["pnpm workspace/project publish"]
+    assert "pnpm skips versions the registry already has." in preview[0].details[0]
+
+
+def test_pnpm_publish_decline_does_not_launch(monkeypatch: Any, tmp_path: Path) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+
+    result, calls, _ = _run_pnpm(monkeypatch, tmp_path, ["publish"], input="\n")
+
+    assert result.exit_code != 0
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "prompt"),
+    [
+        (["dist-tag", "add", "demo@1.0.0"], "Point pnpm dist-tag 'latest' at demo@1.0.0?"),
+        # pnpm 11 and later ignore `--tag` here and move `latest`.
+        (["dist-tag", "add", "demo@1.0.0", "--tag", "beta"], "Point pnpm dist-tag 'latest'"),
+        (["dist-tag", "add", "demo", "latest"], "at demo (no version given)?"),
+        (["dist-tag", "rm", "demo", "beta"], "Remove pnpm dist-tag 'beta' from demo?"),
+    ],
+)
+def test_pnpm_dist_tag_changes_to_latest_and_removals_are_confirmed(
+    monkeypatch: Any, tmp_path: Path, argv, prompt
+) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("NPM_CONFIG_TAG", "beta")
+
+    declined, calls, _ = _run_pnpm(monkeypatch, tmp_path, argv, input="n\n")
+
+    assert declined.exit_code != 0
+    assert prompt in " ".join(declined.output.split())
+    assert calls == []
+
+
+def test_pnpm_dist_tag_addition_of_another_tag_is_not_confirmed(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+
+    result, calls, _ = _run_pnpm(monkeypatch, tmp_path, ["dist-tag", "add", "demo@1.0.0", "beta"])
+
+    assert result.exit_code == 0, result.output
+    assert "Target:" not in result.output
+    assert calls[0]["env"]["PNPM_CONFIG_REGISTRY"] == NPM_PUSH_REGISTRY
+
+
+def test_pnpm_unpublish_explains_trash_and_refusals(monkeypatch: Any, tmp_path: Path) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+    _isolate_config(monkeypatch, tmp_path)
+    _mock_native_tools(monkeypatch)
+
+    class _Refused:
+        returncode = 1
+
+    monkeypatch.setattr(native_runner.subprocess, "run", lambda cmd, *, env, check: _Refused())
+
+    result = runner.invoke(
+        app, ["pnpm", "--rvs-target", "staging/repo-npm", "unpublish", "demo", "--force"]
+    )
+
+    assert result.exit_code == 1
+    stderr = " ".join(result.stderr.split())
+    assert "moves the version to the repository trash" in stderr
+    assert "refused the unpublish with status 405" in stderr
+    assert "rvs art package delete-version NAME VERSION" in stderr
+
+
+@pytest.mark.parametrize("argv", [["--version"], ["-h"], ["help"]])
+def test_pnpm_help_and_version_need_no_target(monkeypatch: Any, tmp_path: Path, argv) -> None:
+    _mock_native_tools(monkeypatch)
+    calls: list[dict[str, Any]] = []
+    _capture_run(monkeypatch, calls)
+
+    result = runner.invoke(app, ["pnpm", *argv])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["cmd"] == ["/bin/pnpm", *argv]
+    assert "PNPM_CONFIG_REGISTRY" not in calls[0]["env"]
+
+
+@pytest.mark.parametrize(
+    ("pin", "running", "warns"),
+    [
+        ("pnpm@9.15.9", "10.34.7", True),
+        ("pnpm@10.34.7+sha512.abc", "10.34.7", False),
+        ("yarn@4.5.0", "10.34.7", False),
+        (None, "10.34.7", False),
+    ],
+)
+def test_pnpm_warns_when_the_project_pins_another_pnpm(
+    monkeypatch: Any, tmp_path: Path, pin, running, warns
+) -> None:
+    from rvs import tool_advisories
+
+    _pnpm_home(monkeypatch, tmp_path)
+    tool_advisories._version_output.cache_clear()
+    tool_advisories._advisory_message.cache_clear()
+    monkeypatch.setattr(tool_advisories, "_read_version", lambda command: f"{running}\n")
+    # A workspace package inherits the pin from the workspace root manifest.
+    root_manifest: dict[str, Any] = {"name": "root", "private": True}
+    if pin:
+        root_manifest["packageManager"] = pin
+    (tmp_path / "package.json").write_text(json.dumps(root_manifest), encoding="utf-8")
+    package = tmp_path / "packages" / "app"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text('{"name": "app"}', encoding="utf-8")
+
+    result, calls, _ = _run_pnpm(monkeypatch, tmp_path, ["-C", str(package), "install"])
+
+    assert result.exit_code == 0, result.output
+    message = " ".join(result.output.split())
+    assert ("but pnpm 10.34.7 is running" in message) is warns
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "warns"),
+    [
+        ("pnpm-workspace.yaml", "registry: https://vendor.test/npm/\n", True),
+        (
+            "pnpm-workspace.yaml",
+            "registries:\n  default: https://registry.npmjs.org/\n  '@acme': https://vendor.test/\n",
+            True,
+        ),
+        ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\nminimumReleaseAge: 0\n", False),
+        (
+            "pnpm-lock.yaml",
+            "lockfileVersion: '9.0'\npackages:\n  demo@1.0.0:\n"
+            "    resolution: {integrity: sha512-x, tarball: https://vendor.test/demo-1.0.0.tgz}\n",
+            True,
+        ),
+        (
+            "pnpm-lock.yaml",
+            "lockfileVersion: '9.0'\npackages:\n  demo@1.0.0:\n"
+            f"    resolution: {{tarball: {NPM_READ_REGISTRY}demo/-/demo-1.0.0.tgz}}\n",
+            False,
+        ),
+        ("pnpm-lock.yaml", "lockfileVersion: '9.0'\npackages: {}\n", False),
+    ],
+)
+def test_pnpm_source_warning_reads_pnpm_settings_and_lockfile(
+    monkeypatch: Any, tmp_path: Path, name, content, warns
+) -> None:
+    _pnpm_home(monkeypatch, tmp_path)
+    (tmp_path / name).write_text(content, encoding="utf-8")
+
+    result, calls, _ = _run_pnpm(monkeypatch, tmp_path, ["install"])
+
+    assert result.exit_code == 0, result.output
+    assert ("Additional native sources" in result.output) is warns
+    assert (tmp_path / name).read_text(encoding="utf-8") == content
+    assert len(calls) == 1

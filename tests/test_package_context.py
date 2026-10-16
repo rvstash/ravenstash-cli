@@ -6,6 +6,7 @@ from rvs.artifacts.targets import parse_target, resolve_target
 from rvs.cli import app
 from rvs.client import ApiClient
 from rvs.native import runner as native_runner
+from rvs.runtime import tools as runtime_tools
 from typer.testing import CliRunner
 
 
@@ -378,7 +379,7 @@ def test_native_wrapper_uses_selected_cache_and_one_shot_does_not_mutate_it(
     class Completed:
         returncode = 0
 
-    monkeypatch.setattr(native_runner.tools, "pip_cmd", lambda: ["/bin/pip"])
+    monkeypatch.setattr(runtime_tools, "pip_cmd", lambda: ["/bin/pip"])
     monkeypatch.setattr(
         native_runner.subprocess,
         "run",

@@ -53,6 +53,7 @@ def found(monkeypatch):
         ("twine", ["pypi"]),
         ("uv", ["pypi"]),
         ("npm", ["npm"]),
+        ("pnpm", ["npm"]),
         ("mvn", ["maven"]),
         ("maven", ["maven"]),
         ("docker", ["oci"]),
@@ -85,7 +86,7 @@ def test_fixed_intent_tools_reject_access(found, tool, access):
         render(found, tool, None, access)
 
 
-@pytest.mark.parametrize("tool", ["uv", "npm", "mvn", "docker", "helm", "oras"])
+@pytest.mark.parametrize("tool", ["uv", "npm", "pnpm", "mvn", "docker", "helm", "oras"])
 def test_read_templates_exclude_publish_instructions(found, tool):
     result = render(found, tool, None, "read")
     text = "\n".join(item["text"] for item in result["snippets"])

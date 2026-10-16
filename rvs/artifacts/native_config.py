@@ -16,6 +16,7 @@ TOOLS = {
     "uv": "pypi",
     "twine": "pypi",
     "npm": "npm",
+    "pnpm": "npm",
     "mvn": "maven",
     "docker": "oci",
     "helm": "oci",
@@ -26,7 +27,8 @@ def render(found: Discovery, tool: str, kind: str | None, access: str | None) ->
     tool = "mvn" if tool == "maven" else tool
     if tool not in {*TOOLS, "oras"}:
         raise ValueError(
-            f"Unknown native tool '{tool}'. Choose pip, uv, twine, npm, mvn, docker, helm, or oras."
+            f"Unknown native tool '{tool}'. "
+            "Choose pip, uv, twine, npm, pnpm, mvn, docker, helm, or oras."
         )
     if tool in {"pip", "twine"} and access is not None:
         raise ValueError(
@@ -122,15 +124,16 @@ export PIP_INDEX_URL={shlex.quote(read)}""",
             f'export TWINE_USERNAME=rvs\nexport TWINE_PASSWORD="$RVS_NATIVE_TOKEN"\nexport TWINE_REPOSITORY_URL={shlex.quote(str(push))}\nexport TWINE_NON_INTERACTIVE=1',
         )
         add("command", "twine upload dist/*")
-    elif tool == "npm":
+    elif tool in {"npm", "pnpm"}:
+        # pnpm reads registry and credential settings from the same .npmrc files.
         config = f"registry={read}\n{npm_auth_token_key(read)}=${{RVS_NATIVE_TOKEN}}\n"
         if push and push != read:
             config += f"{npm_auth_token_key(push)}=${{RVS_NATIVE_TOKEN}}\n"
         add("config", config, ".npmrc")
+        install = "npm install PACKAGE" if tool == "npm" else "pnpm add PACKAGE"
         add(
             "command",
-            "npm install PACKAGE"
-            + (f"\nnpm publish --registry {shlex.quote(push)}" if push else ""),
+            install + (f"\n{tool} publish --registry {shlex.quote(push)}" if push else ""),
         )
     elif tool == "mvn":
         servers = "<server><id>ravenstash-read</id><username>rvs</username><password>${env.RVS_NATIVE_TOKEN}</password></server>"

@@ -198,82 +198,100 @@ def _option(argv: list[str], *names: str) -> str | None:
     return None
 
 
-def native_artifacts(tool: str, argv: list[str]) -> list[PublishItem]:
-    if tool == "npm":
-        index = argv.index("publish") if "publish" in argv else -1
-        candidate = argv[index + 1] if index >= 0 and index + 1 < len(argv) else "."
-        if candidate.startswith("-"):
-            return [
-                PublishItem(
-                    "npm publish",
-                    (
-                        "Package selection and tarball are resolved by npm.",
-                        f"npm tag: {_option(argv, '--tag') or 'resolved by npm'}",
-                    ),
-                )
-            ]
-        if any(
-            arg in {"--workspace", "-w", "--workspaces", "--prefix"}
-            or arg.startswith(("--workspace=", "--prefix="))
-            for arg in argv
-        ):
-            return [
-                PublishItem(
-                    "npm workspace/project publish",
-                    ("Package selection and tarballs are resolved by npm.",),
-                )
-            ]
-        return [
-            npm_artifact(
-                Path(candidate if not candidate.startswith("-") else "."),
-                tag=_option(argv, "--tag") or "resolved by npm",
-            )
-        ]
-    if tool == "mvn":
-        props = {
-            arg[2:].partition("=")[0]: arg.partition("=")[2]
-            for arg in argv
-            if arg.startswith("-D") and "=" in arg
-        }
-        pom = Path(props.get("pomFile") or _option(argv, "-f", "--file") or "pom.xml")
-        if pom.is_dir():
-            pom /= "pom.xml"
-        try:
-            root = ET.parse(pom).getroot()
-
-            def field(name: str) -> str:
-                return (
-                    root.findtext(f"{{*}}{name}")
-                    or root.findtext(f"{{*}}parent/{{*}}{name}")
-                    or "?"
-                )
-
-            group, artifact, version = (
-                props.get(key) or field(key) for key in ("groupId", "artifactId", "version")
-            )
-        except OSError, ET.ParseError:
-            group, artifact, version = (
-                props.get(key, "?") for key in ("groupId", "artifactId", "version")
-            )
-        files = [props[key] for key in ("file", "pomFile") if props.get(key)]
-        files.extend(value for value in props.get("files", "").split(",") if value)
-        if files and props.get("file"):
-            return [
-                PublishItem(
-                    f"Maven {group}:{artifact}:{version}",
-                    (*files, "Generated POM/checksum files are resolved by Maven."),
-                )
-            ]
+def npm_publish_items(argv: list[str]) -> list[PublishItem]:
+    index = argv.index("publish") if "publish" in argv else -1
+    candidate = argv[index + 1] if index >= 0 and index + 1 < len(argv) else "."
+    if candidate.startswith("-"):
         return [
             PublishItem(
-                f"Maven {group}:{artifact}:{version}",
+                "npm publish",
                 (
-                    f"Project: {pom}",
-                    "Build output, modules and attached artifacts are resolved by Maven.",
+                    "Package selection and tarball are resolved by npm.",
+                    f"npm tag: {_option(argv, '--tag') or 'resolved by npm'}",
                 ),
             )
         ]
-    command = "publish" if tool == "uv" else "upload"
+    if any(
+        arg in {"--workspace", "-w", "--workspaces", "--prefix"}
+        or arg.startswith(("--workspace=", "--prefix="))
+        for arg in argv
+    ):
+        return [
+            PublishItem(
+                "npm workspace/project publish",
+                ("Package selection and tarballs are resolved by npm.",),
+            )
+        ]
+    return [npm_artifact(Path(candidate), tag=_option(argv, "--tag") or "resolved by npm")]
+
+
+def pnpm_publish_items(argv: list[str], publish_index: int) -> list[PublishItem]:
+    """Preview `pnpm publish`; *publish_index* is the position of the command."""
+    tag = _option(argv, "--tag") or "resolved by pnpm"
+    if any(
+        arg in {"-r", "--recursive", "--filter", "-F", "--filter-prod", "--dir", "-C"}
+        or arg.startswith(("--filter=", "--filter-prod=", "--dir="))
+        for arg in argv
+    ):
+        return [
+            PublishItem(
+                "pnpm workspace/project publish",
+                (
+                    "Package selection and tarballs are resolved by pnpm; "
+                    "pnpm skips versions the registry already has.",
+                    f"npm tag: {tag}",
+                ),
+            )
+        ]
+    rest = argv[publish_index + 1 :]
+    candidate = rest[0] if rest and not rest[0].startswith("-") else "."
+    return [npm_artifact(Path(candidate), tag=tag)]
+
+
+def maven_publish_items(argv: list[str]) -> list[PublishItem]:
+    props = {
+        arg[2:].partition("=")[0]: arg.partition("=")[2]
+        for arg in argv
+        if arg.startswith("-D") and "=" in arg
+    }
+    pom = Path(props.get("pomFile") or _option(argv, "-f", "--file") or "pom.xml")
+    if pom.is_dir():
+        pom /= "pom.xml"
+    try:
+        root = ET.parse(pom).getroot()
+
+        def field(name: str) -> str:
+            return root.findtext(f"{{*}}{name}") or root.findtext(f"{{*}}parent/{{*}}{name}") or "?"
+
+        group, artifact, version = (
+            props.get(key) or field(key) for key in ("groupId", "artifactId", "version")
+        )
+    except OSError, ET.ParseError:
+        group, artifact, version = (
+            props.get(key, "?") for key in ("groupId", "artifactId", "version")
+        )
+    files = [props[key] for key in ("file", "pomFile") if props.get(key)]
+    files.extend(value for value in props.get("files", "").split(",") if value)
+    if files and props.get("file"):
+        return [
+            PublishItem(
+                f"Maven {group}:{artifact}:{version}",
+                (*files, "Generated POM/checksum files are resolved by Maven."),
+            )
+        ]
+    return [
+        PublishItem(
+            f"Maven {group}:{artifact}:{version}",
+            (
+                f"Project: {pom}",
+                "Build output, modules and attached artifacts are resolved by Maven.",
+            ),
+        )
+    ]
+
+
+def pypi_publish_items(argv: list[str], *, command: str, default_dist: bool) -> list[PublishItem]:
+    """Preview `uv publish` or `twine upload`; *default_dist* reads `dist/` when no files are named."""
     files: list[str] = []
     selection_known = command in argv
     if any(
@@ -318,7 +336,7 @@ def native_artifacts(tool: str, argv: list[str]) -> list[PublishItem]:
             selection_known = False
         else:
             files.append(arg)
-    if not files and selection_known and tool == "uv":
+    if not files and selection_known and default_dist:
         files = [
             str(path)
             for path in sorted(Path("dist").glob("*"))

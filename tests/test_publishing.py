@@ -6,9 +6,9 @@ from typing import TYPE_CHECKING
 
 import typer
 from rvs import config, output
+from rvs.native.adapters import ADAPTERS
 from rvs.publishing import (
     confirm_publish,
-    native_artifacts,
     npm_artifact,
     oci_artifacts,
     pypi_artifacts,
@@ -94,7 +94,7 @@ def test_maven_coordinates_and_classified_files(tmp_path, monkeypatch):
     (tmp_path / "pom.xml").write_text(
         '<project xmlns="http://maven.apache.org/POM/4.0.0"><parent><groupId>com.acme</groupId><version>1.4.0</version></parent><artifactId>sdk</artifactId></project>'
     )
-    project = native_artifacts("mvn", ["deploy"])[0]
+    project = ADAPTERS["mvn"].publish_items(["deploy"])[0]
     assert project.identity == "Maven com.acme:sdk:1.4.0"
     assert project.file_count is None
     assert "resolved by Maven" in project.details[-1]
@@ -132,14 +132,16 @@ def test_native_pypi_glob_and_default_selection(tmp_path, monkeypatch):
     dist.mkdir()
     wheel(dist / "demo.whl")
     (dist / "unrelated.txt").write_text("unrelated")
-    assert native_artifacts("uv", ["publish"])[0].details == ("demo.whl",)
-    assert native_artifacts(
-        "twine", ["upload", "--repository-url", "https://example.test", "dist/*.whl"]
+    assert ADAPTERS["uv"].publish_items(["publish"])[0].details == ("demo.whl",)
+    assert ADAPTERS["twine"].publish_items(
+        ["upload", "--repository-url", "https://example.test", "dist/*.whl"]
     )[0].details == ("demo.whl",)
     # Unknown selection options must not produce a confidently incorrect inventory.
     assert (
-        native_artifacts("uv", ["publish", "--directory", "another-project"])[0].file_count is None
+        ADAPTERS["uv"].publish_items(["publish", "--directory", "another-project"])[0].file_count
+        is None
     )
     assert (
-        native_artifacts("uv", ["--directory", "another-project", "publish"])[0].file_count is None
+        ADAPTERS["uv"].publish_items(["--directory", "another-project", "publish"])[0].file_count
+        is None
     )

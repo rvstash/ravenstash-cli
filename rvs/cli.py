@@ -147,6 +147,12 @@ app.command(
     rich_help_panel=NODE_TOOLS_PANEL,
 )(native_commands.npm)
 app.command(
+    "pnpm",
+    context_settings=native_commands.PASSTHROUGH_CONTEXT,
+    help="Run pnpm with temporary access to a Ravenstash npm repository.",
+    rich_help_panel=NODE_TOOLS_PANEL,
+)(native_commands.pnpm)
+app.command(
     "mvn",
     context_settings=native_commands.PASSTHROUGH_CONTEXT,
     help="Run Maven with temporary access to a Ravenstash Maven repository.",
