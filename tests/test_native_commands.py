@@ -1725,8 +1725,11 @@ def test_pnpm_keeps_a_user_global_config_unless_isolated(monkeypatch: Any, tmp_p
     result, calls, _ = _run_pnpm(monkeypatch, tmp_path, ["install"])
 
     assert result.exit_code == 0, result.output
-    assert calls[0]["env"]["npm_config_globalconfig"] == str(tmp_path / "global.npmrc")
-    assert "NPM_CONFIG_GLOBALCONFIG" not in calls[0]["env"]
+    # Windows keeps environment names case-insensitively, in upper case.
+    global_configs = [
+        value for key, value in calls[0]["env"].items() if key.lower() == "npm_config_globalconfig"
+    ]
+    assert global_configs == [str(tmp_path / "global.npmrc")]
 
 
 def test_pnpm_isolate_uses_only_the_injected_credential(monkeypatch: Any, tmp_path: Path) -> None:
