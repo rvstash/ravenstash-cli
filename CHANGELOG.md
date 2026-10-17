@@ -6,6 +6,8 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-17
+
 ### Added
 
 - `rvs python -m build` runs pypa/build with temporary read access, so build requirements come from the selected repository. Pair it with `rvs twine upload dist/*`. Other Python commands are refused.
@@ -14,6 +16,8 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 ### Fixed
 
 - Old-client version checks run outside the project directory, so a `packageManager` pin no longer makes pnpm download another version just to report its own.
+
+Detailed release notes: [Ravenstash CLI 0.16.0](docs/releases/0.16.0.md).
 
 ## [0.15.1] - 2026-10-12
 
@@ -40,6 +44,7 @@ Detailed release notes: [Ravenstash CLI 0.15.1](docs/releases/0.15.1.md).
 
 Detailed release notes: [Ravenstash CLI 0.15.0](docs/releases/0.15.0.md).
 
-[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.16.0
 [0.15.1]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.1
 [0.15.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.0
