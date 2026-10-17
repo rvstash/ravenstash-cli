@@ -1618,6 +1618,7 @@ def _pnpm_home(monkeypatch: Any, tmp_path: Path) -> Path:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     for name in ("NPM_CONFIG_USERCONFIG", "npm_config_userconfig"):
         monkeypatch.delenv(name, raising=False)
@@ -1635,7 +1636,8 @@ def _run_pnpm(
 
     def hook(_cmd: list[str], env: dict[str, str]) -> None:
         path = Path(env["NPM_CONFIG_USERCONFIG"])
-        assert oct(path.stat().st_mode & 0o777) == "0o600"
+        if os.name != "nt":  # Windows has no POSIX permission bits.
+            assert oct(path.stat().st_mode & 0o777) == "0o600"
         user_configs.append(path.read_text(encoding="utf-8"))
 
     _capture_run(monkeypatch, calls, hook)
