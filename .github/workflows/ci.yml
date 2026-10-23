@@ -115,7 +115,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up pinned uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.11.24"
           enable-cache: true
@@ -155,7 +155,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up pinned uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.11.24"
           enable-cache: true
@@ -254,7 +254,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24
+        uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702
       - name: Evaluate all targets and build the native package
         run: |
           nix flake show --all-systems --no-write-lock-file
