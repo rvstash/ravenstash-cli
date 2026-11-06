@@ -151,7 +151,7 @@ jobs:
       version_override: ${{ needs.prepare.outputs.version }}
       artifact_prefix: ravenstash-cli-test-target
       target: macos-arm64
-      runner: macos-14
+      runner: macos-15
       kind: portable
       architecture: arm64
       artifact_paths: dist/release/ravenstash-cli-v${{ needs.prepare.outputs.version }}-macos-arm64.tar.gz

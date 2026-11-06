@@ -6,7 +6,7 @@ Ravenstash treats platform support as an installation, runtime, credential-stora
 | --- | --- | --- |
 | Linux with glibc 2.28+ | amd64, arm64 | signed APT package and portable archive |
 | Linux with musl, including Alpine | amd64, arm64 | signed portable archive |
-| macOS 14+ on Apple Silicon; macOS 15+ on Intel | Intel, Apple Silicon | checksummed portable archive; `install.sh` |
+| macOS 15+ | Intel, Apple Silicon | checksummed portable archive; `install.sh` |
 | Windows 11 | x64, ARM64 | checksummed ZIP; `install.ps1` |
 | NixOS and Nix on Linux/macOS | x86_64, aarch64 | flake package |
 | WSL2 | x86_64, aarch64 | matching Linux path |
