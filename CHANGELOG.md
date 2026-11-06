@@ -9,6 +9,7 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 ### Changed
 
 - macOS 15 is now the oldest supported macOS on Apple Silicon, as it already was on Intel. GitHub no longer provides macOS 14 runners, so releases can no longer be certified on it. The installer and `rvs update` do not check the macOS version, and existing macOS 14 installations are not blocked.
+- Updated the bundled httpx2 to 2.16.0. No command, option, or output changes.
 
 ## [0.16.0] - 2026-10-17
 
