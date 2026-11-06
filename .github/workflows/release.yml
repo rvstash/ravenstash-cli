@@ -166,7 +166,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       version: ${{ inputs.version }}
       target: macos-arm64
-      runner: macos-14
+      runner: macos-15
       kind: portable
       architecture: arm64
       artifact_paths: dist/release/ravenstash-cli-v${{ inputs.version }}-macos-arm64.tar.gz
