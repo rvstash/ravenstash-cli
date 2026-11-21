@@ -8,6 +8,13 @@ updates:
     groups:
       python:
         patterns: ["*"]
+    ignore:
+      # Typer 0.29 validates parameters with Pydantic, which changes every help
+      # screen and validation message and bundles Pydantic. Adopt it on purpose.
+      - dependency-name: typer
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
 
   - package-ecosystem: npm
     directory: /packaging/installer-worker
