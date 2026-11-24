@@ -9,7 +9,7 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 ### Changed
 
 - macOS 15 is now the oldest supported macOS on Apple Silicon, as it already was on Intel. GitHub no longer provides macOS 14 runners, so releases can no longer be certified on it. The installer and `rvs update` do not check the macOS version, and existing macOS 14 installations are not blocked.
-- Updated the bundled httpx2 to 2.16.2, Typer to 0.28.0, and Click to 8.5.1. No command, option, or output changes.
+- Updated the bundled httpx2 to 2.16.2, Typer to 0.28.0, Click to 8.5.1, PyYAML to 6.0.4, and packaging to 26.4, and refreshed the libraries they depend on. No command, option, or output changes.
 
 ## [0.16.0] - 2026-10-17
 
