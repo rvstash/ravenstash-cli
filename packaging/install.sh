@@ -118,34 +118,52 @@ verify_signing_key() {
   fi
 }
 
+# curl's --retry covers timeouts and transient HTTP statuses but not a reset or
+# dropped connection, and --retry-all-errors is newer than the curl some
+# supported systems ship, so connection failures are retried here. Exit status
+# 22 is an HTTP error that curl has already retried when it was transient.
+download() {
+  local attempt status
+  for attempt in 1 2 3; do
+    status=0
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --retry 2 "$@" || status=$?
+    if (( status == 0 || status == 22 || attempt == 3 )); then
+      return "$status"
+    fi
+    printf 'rvs installer: download interrupted (curl exit %s); retrying\n' "$status" >&2
+    sleep "$((attempt * 2))"
+  done
+}
+
 download_release_asset() {
   local release_url="$1"
   local asset_name="$2"
   local destination="$3"
   if [[ -z "${RVS_GITHUB_TOKEN:-}" ]]; then
-    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
-      "${release_url}/${asset_name}" -o "$destination"
+    download "${release_url}/${asset_name}" -o "$destination"
     return
   fi
-  local release_api asset_api auth_header
+  local release_api release_json asset_api auth_header
   auth_header="${destination}.github-auth"
+  release_json="${destination}.release.json"
   (umask 077; printf 'Authorization: Bearer %s\n' "$RVS_GITHUB_TOKEN" > "$auth_header")
   release_api="https://api.github.com/repos/${github_repository}/releases/tags/v${selected_release_version}"
+  download \
+    -H "@${auth_header}" \
+    -H 'Accept: application/vnd.github+json' \
+    "$release_api" -o "$release_json"
   asset_api="$(
-    curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
-      -H "@${auth_header}" \
-      -H 'Accept: application/vnd.github+json' \
-      "$release_api" \
-      | awk -v expected="\"name\": \"${asset_name}\"" '
-          /"url": "https:\/\/api.github.com\/repos\/.*\/releases\/assets\// {
-            url=$2; gsub(/[",]/, "", url)
-          }
-          index($0, expected) { print url; exit }
-        '
+    awk -v expected="\"name\": \"${asset_name}\"" '
+      /"url": "https:\/\/api.github.com\/repos\/.*\/releases\/assets\// {
+        url=$2; gsub(/[",]/, "", url)
+      }
+      index($0, expected) { print url; exit }
+    ' "$release_json"
   )"
+  rm -f -- "$release_json"
   [[ "$asset_api" == "https://api.github.com/repos/${github_repository}/releases/assets/"* ]] \
     || fail "release v${selected_release_version} does not contain ${asset_name}"
-  curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
+  download \
     -H "@${auth_header}" \
     -H 'Accept: application/octet-stream' \
     "$asset_api" -o "$destination"
@@ -170,8 +188,7 @@ install_apt_package() {
   fi
 
   say "downloading and verifying the Ravenstash APT signing key"
-  curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
-    -fsSL "$signing_key_url" -o "$temporary_key"
+  download "$signing_key_url" -o "$temporary_key"
   verify_signing_key "$temporary_key"
 
   if [[ -e "$keyring_path" ]]; then
@@ -322,8 +339,7 @@ install_portable_archive() {
   download_release_asset "$release_url" "$archive_name" "${temporary_directory}/${archive_name}"
   download_release_asset "$release_url" "$checksums_name" "${temporary_directory}/${checksums_name}"
   download_release_asset "$release_url" "$signature_name" "${temporary_directory}/${signature_name}"
-  curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL \
-    "$signing_key_url" -o "$temporary_key"
+  download "$signing_key_url" -o "$temporary_key"
   verify_signing_key "$temporary_key"
   local temporary_gnupg="${temporary_directory}/gnupg"
   install -d -m 0700 "$temporary_gnupg"

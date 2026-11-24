@@ -15,6 +15,10 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 - The Nix flake no longer provides a package for Intel Macs (`x86_64-darwin`). Nixpkgs 26.05 is the last Nixpkgs release for Intel Macs, and Nix 2.36 is no longer released for them. On an Intel Mac, install the signed portable archive with `install.sh`. An existing Nix installation on an Intel Mac keeps its current release: `rvs update --apply` cannot install a newer one there and restores the installed release.
 
+### Fixed
+
+- The Linux and macOS installer retries a download up to three times when the connection drops or is reset, instead of failing the installation on the first network error. HTTP errors such as a missing release still fail at once.
+
 ## [0.16.0] - 2026-10-17
 
 ### Added

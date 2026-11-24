@@ -761,6 +761,59 @@ def test_installer_is_owned_by_cli_packaging_and_pins_release_identity() -> None
     assert "RVS_GITHUB_TOKEN" in windows_source
 
 
+def _run_installer_download(tmp_path: Path, exit_statuses: list[int]) -> tuple[int, list[str], str]:
+    """Run the installer's download helper against a curl stub with scripted exits."""
+    source = INSTALLER.read_text(encoding="utf-8")
+    match = re.search(r"^download\(\) \{\n.*?^\}\n", source, re.MULTILINE | re.DOTALL)
+    assert match is not None
+    calls = tmp_path / "calls"
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            "statuses=(" + " ".join(str(status) for status in exit_statuses) + ")",
+            f"calls={calls}",
+            'curl() { printf \'%s\\n\' "$*" >> "$calls"; local n; n="$(wc -l < "$calls")";'
+            ' return "${statuses[$((n - 1))]}"; }',
+            "sleep() { :; }",
+            match.group(0),
+            "download https://example.invalid/asset -o out",
+        ]
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    lines = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+    return result.returncode, lines, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+def test_installer_download_retries_dropped_connections(tmp_path: Path) -> None:
+    status, calls, stderr = _run_installer_download(tmp_path, [56, 0])
+
+    assert status == 0
+    assert len(calls) == 2
+    assert all(
+        "--retry 2" in call and call.endswith("https://example.invalid/asset -o out")
+        for call in calls
+    )
+    assert "download interrupted (curl exit 56); retrying" in stderr
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+def test_installer_download_stops_after_three_attempts(tmp_path: Path) -> None:
+    status, calls, _stderr = _run_installer_download(tmp_path, [56, 7, 35])
+
+    assert status == 35
+    assert len(calls) == 3
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+def test_installer_download_does_not_repeat_http_errors(tmp_path: Path) -> None:
+    status, calls, stderr = _run_installer_download(tmp_path, [22])
+
+    assert status == 22
+    assert len(calls) == 1
+    assert "retrying" not in stderr
+
+
 def test_installer_accepts_musl_ldd_diagnostic_exit_status() -> None:
     source = INSTALLER.read_text(encoding="utf-8")
 
