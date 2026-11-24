@@ -784,7 +784,7 @@ def _run_installer_download(tmp_path: Path, exit_statuses: list[int]) -> tuple[i
     return result.returncode, lines, result.stderr
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.skipif(os.name == "nt", reason="the Linux and macOS installer is POSIX-only")
 def test_installer_download_retries_dropped_connections(tmp_path: Path) -> None:
     status, calls, stderr = _run_installer_download(tmp_path, [56, 0])
 
@@ -797,7 +797,7 @@ def test_installer_download_retries_dropped_connections(tmp_path: Path) -> None:
     assert "download interrupted (curl exit 56); retrying" in stderr
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.skipif(os.name == "nt", reason="the Linux and macOS installer is POSIX-only")
 def test_installer_download_stops_after_three_attempts(tmp_path: Path) -> None:
     status, calls, _stderr = _run_installer_download(tmp_path, [56, 7, 35])
 
@@ -805,7 +805,7 @@ def test_installer_download_stops_after_three_attempts(tmp_path: Path) -> None:
     assert len(calls) == 3
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is required")
+@pytest.mark.skipif(os.name == "nt", reason="the Linux and macOS installer is POSIX-only")
 def test_installer_download_does_not_repeat_http_errors(tmp_path: Path) -> None:
     status, calls, stderr = _run_installer_download(tmp_path, [22])
 
