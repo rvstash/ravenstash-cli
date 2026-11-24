@@ -37,7 +37,6 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
       forAllSystems = lib.genAttrs systems;
@@ -50,33 +49,11 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           pythonBase = pkgs.callPackage pyproject-nix.build.packages { python = pkgs.python314; };
-          buildHacks = pkgs.callPackage pyproject-nix.build.hacks { };
-          cryptographySourceBuild = final: prev:
-            lib.optionalAttrs (system == "x86_64-darwin") {
-              # Cryptography 50 no longer publishes Intel macOS wheels. Build
-              # the exact locked sdist with its Cargo and native dependencies.
-              cryptography = (buildHacks.importCargoLock {
-                prev = prev.cryptography;
-                cargoRoot = "src/rust";
-              }).overrideAttrs (old: {
-                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.pkg-config ] ++ final.resolveBuildSystem {
-                  cffi = [ ];
-                  maturin = [ ];
-                  pycparser = [ ];
-                  setuptools = [ ];
-                };
-                buildInputs = (old.buildInputs or [ ]) ++ [
-                  pkgs.libiconv
-                  pkgs.openssl
-                ];
-              });
-            };
         in
         pythonBase.overrideScope (
           lib.composeManyExtensions [
             pyproject-build-systems.overlays.wheel
             workspaceOverlay
-            cryptographySourceBuild
           ]
         )
       );

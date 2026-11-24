@@ -11,6 +11,10 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 - macOS 15 is now the oldest supported macOS on Apple Silicon, as it already was on Intel. GitHub no longer provides macOS 14 runners, so releases can no longer be certified on it. The installer and `rvs update` do not check the macOS version, and existing macOS 14 installations are not blocked.
 - Updated the bundled httpx2 to 2.16.2, Typer to 0.28.0, Click to 8.5.1, PyYAML to 6.0.4, and packaging to 26.4, and refreshed the libraries they depend on. No command, option, or output changes.
 
+### Removed
+
+- The Nix flake no longer provides a package for Intel Macs (`x86_64-darwin`). Nixpkgs 26.05 is the last Nixpkgs release for Intel Macs, and Nix 2.36 is no longer released for them. On an Intel Mac, install the signed portable archive with `install.sh`. An existing Nix installation on an Intel Mac keeps its current release: `rvs update --apply` cannot install a newer one there and restores the installed release.
+
 ## [0.16.0] - 2026-10-17
 
 ### Added

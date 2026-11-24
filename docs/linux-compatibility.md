@@ -8,7 +8,8 @@ Ravenstash treats platform support as an installation, runtime, credential-stora
 | Linux with musl, including Alpine | amd64, arm64 | signed portable archive |
 | macOS 15+ | Intel, Apple Silicon | checksummed portable archive; `install.sh` |
 | Windows 11 | x64, ARM64 | checksummed ZIP; `install.ps1` |
-| NixOS and Nix on Linux/macOS | x86_64, aarch64 | flake package |
+| NixOS and Nix on Linux | x86_64, aarch64 | flake package |
+| Nix on macOS | Apple Silicon | flake package; Intel Macs use the portable archive |
 | WSL2 | x86_64, aarch64 | matching Linux path |
 
 Path-aware CI tests source on native Linux, macOS, and Windows runners and builds one Ubuntu 20.04 baseline package when runtime or packaging inputs change. Nix checks run only when Nix or dependency inputs change. The scheduled or manual platform-certification workflow builds the frozen bundle on native Linux, macOS, and Windows runners for both architectures and on Alpine musl, and exercises real managed-runtime downloads there. One release workflow builds isolated native artifacts from one exact source commit, assembles one collision-free checksum inventory, creates keyless Sigstore provenance for that complete inventory, and publishes those same bytes without rebuilding them. Maintainers can also build selected targets from an exact commit as an unsigned, seven-day Actions artifact without publishing.
