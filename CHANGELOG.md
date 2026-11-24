@@ -6,6 +6,8 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-24
+
 ### Changed
 
 - macOS 15 is now the oldest supported macOS on Apple Silicon, as it already was on Intel. GitHub no longer provides macOS 14 runners, so releases can no longer be certified on it. The installer and `rvs update` do not check the macOS version, and existing macOS 14 installations are not blocked.
@@ -18,6 +20,8 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 ### Fixed
 
 - The Linux and macOS installer retries a download up to three times when the connection drops or is reset, instead of failing the installation on the first network error. HTTP errors such as a missing release still fail at once.
+
+Detailed release notes: [Ravenstash CLI 0.16.1](docs/releases/0.16.1.md).
 
 ## [0.16.0] - 2026-10-17
 
@@ -57,7 +61,8 @@ Detailed release notes: [Ravenstash CLI 0.15.1](docs/releases/0.15.1.md).
 
 Detailed release notes: [Ravenstash CLI 0.15.0](docs/releases/0.15.0.md).
 
-[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.16.1
 [0.16.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.16.0
 [0.15.1]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.1
 [0.15.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.0
