@@ -705,3 +705,16 @@ def test_an_unmarked_listing_falls_back_to_the_well_known_default():
     assert targets.default_official_cache([other, unmarked], "pypi") == unmarked
     marked = official(PERSONAL, "pypi", "pytorch", default=True)
     assert targets.default_official_cache([unmarked, marked], "pypi") == marked
+
+
+def test_select_and_clear_accept_the_short_format_option(monkeypatch, tmp_path):
+    isolate(monkeypatch, tmp_path)
+    serve(monkeypatch, FakeApi([PERSONAL], repo=repository(PERSONAL, "pypi", "npm", "maven")))
+
+    selected_result = runner.invoke(app, ["art", "select", "platform/packages", "-f", "pypi,npm"])
+    assert selected_result.exit_code == 0, selected_result.output
+    assert set(selected()) == {"pypi", "npm"}
+
+    cleared = runner.invoke(app, ["art", "clear", "-f", "npm"])
+    assert cleared.exit_code == 0, cleared.output
+    assert set(selected()) == {"pypi"}

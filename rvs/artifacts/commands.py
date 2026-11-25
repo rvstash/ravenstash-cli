@@ -166,7 +166,7 @@ def target_select(
             "mirror:<source>, or custom-mirror:<name>."
         ),
     ),
-    kinds: list[str] | None = typer.Option(None, "--format", help=_SELECT_FORMAT_HELP),
+    kinds: list[str] | None = typer.Option(None, "--format", "-f", help=_SELECT_FORMAT_HELP),
     account: str | None = typer.Option(None, "--account", help=_ACCOUNT_HELP),
     profile: str | None = typer.Option(None, "--profile", "-p"),
 ) -> None:
@@ -239,6 +239,7 @@ def target_clear(
     kinds: list[str] | None = typer.Option(
         None,
         "--format",
+        "-f",
         help="Format to clear: pypi | npm | maven | oci. Repeat or separate with commas. "
         "Default: every format.",
     ),
