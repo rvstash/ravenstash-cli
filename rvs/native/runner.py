@@ -99,6 +99,11 @@ def _build_plan(
         and saved is None
         and not _may_use_default_mirror(options, account_ref, adapter.kind, operations)
     ):
+        if set(operations) - {"read"}:
+            output.fatal(
+                f"No {adapter.kind} repository is selected. Publishing needs a private "
+                "repository: run `rvs art select NAMESPACE/REPOSITORY` or pass --rvs-target."
+            )
         output.fatal(
             f"No Ravenstash target is selected for {adapter.kind}. Run `rvs art select` or pass "
             "--rvs-target. Use the native tool directly for its default registries."
@@ -136,6 +141,7 @@ def _resolve_route(
 ) -> RegistryRoute:
     context = registry_context(
         kind=kind,
+        target_flag="--rvs-target",
         target=options.target,
         repo=None,
         profile=options.profile,

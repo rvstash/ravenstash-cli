@@ -454,7 +454,7 @@ def test_status_shows_an_unknown_default_mirror_when_the_lookup_fails(
     }
     assert formats["oci"]["source"] == "none"
     human = runner.invoke(app, ["art", "status"])
-    assert "default mirror (default mirror, automatic)" in _row(human.output, "maven target")
+    assert "default mirror, automatic (not checked)" in _row(human.output, "maven target")
 
 
 def test_status_has_no_default_mirror_for_automation(monkeypatch, tmp_path: Path) -> None:

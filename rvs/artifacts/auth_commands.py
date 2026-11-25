@@ -76,7 +76,11 @@ def mint(
             if all_formats and requested:
                 raise ValueError("--all-formats and --format are mutually exclusive.")
             found = discover(
-                target, profile, account, requested[0] if len(requested) == 1 else None
+                target,
+                profile,
+                account,
+                requested[0] if len(requested) == 1 else None,
+                selection_formats=requested,
             )
             selected = found.target
             if not requested and not all_formats:

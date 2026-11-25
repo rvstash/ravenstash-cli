@@ -2,7 +2,9 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+import httpx2 as httpx
 
 from .. import config as cfg_mod
 from .. import output
@@ -19,6 +21,10 @@ from .formats import FORMATS
 from .routing import native_path
 
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
 PackageFormat = Literal["pypi", "npm", "maven"]
 PackageOperation = Literal["read", "publish", "delete"]
 DEFAULT_OFFICIAL_SOURCES: dict[PackageFormat, str] = {
@@ -26,6 +32,10 @@ DEFAULT_OFFICIAL_SOURCES: dict[PackageFormat, str] = {
     "npm": "npmjs",
     "maven": "maven-central",
 }
+
+
+class TargetNotFoundError(ValueError):
+    """A mirror target names no remote cache of the account."""
 
 
 @dataclass(frozen=True)
@@ -255,9 +265,16 @@ def resolve_target(
     profile: str | None = None,
     account_ref: str | None = None,
     kind: str | None = None,
+    selected_for: cfg_mod.Format | None = None,
+    selection_display: str | None = None,
 ) -> tuple[str, cfg_mod.AccountContext, cfg_mod.ArtifactTarget]:
     profile_name, account, target, _ = resolve_target_formats(
-        value, profile=profile, account_ref=account_ref, kind=kind
+        value,
+        profile=profile,
+        account_ref=account_ref,
+        kind=kind,
+        selected_for=selected_for,
+        selection_display=selection_display,
     )
     return profile_name, account, target
 
@@ -268,8 +285,14 @@ def resolve_target_formats(
     profile: str | None = None,
     account_ref: str | None = None,
     kind: str | None = None,
+    selected_for: cfg_mod.Format | None = None,
+    selection_display: str | None = None,
 ) -> tuple[str, cfg_mod.AccountContext, cfg_mod.ArtifactTarget, tuple[cfg_mod.Format, ...]]:
-    """Resolve a target and return the formats it has: a mirror has exactly one."""
+    """Resolve a target and return the formats it has: a mirror has exactly one.
+
+    *selected_for* names the format whose saved selection is being resolved, so
+    a selection that no longer resolves gets a message that says how to fix it.
+    """
     spec = parse_target(value)
     profile_name = profile or cfg_mod.current_profile_name()
     if kind is not None and kind not in {"pypi", "npm", "maven", "oci"}:
@@ -307,7 +330,7 @@ def resolve_target_formats(
             )
             matches = matching_remote_caches(remotes, spec.target_type, spec.selector)
             if not matches:
-                raise ValueError(f"Package target '{value}' was not found in this account")
+                raise TargetNotFoundError(f"Package target '{value}' was not found in this account")
             if len(matches) > 1:
                 kinds = ", ".join(sorted({str(item["format"]) for item in matches}))
                 raise ValueError(
@@ -316,6 +339,14 @@ def resolve_target_formats(
             target = _remote_target(matches[0], spec.target_type)
             formats = (cast("cfg_mod.Format", target.format),)
     except (ApiError, KeyError, TypeError, ValueError) as exc:
+        if selected_for is not None and (
+            isinstance(exc, TargetNotFoundError) or getattr(exc, "status_code", None) == 404
+        ):
+            output.fatal(
+                f"The {selected_for} selection '{selection_display or value}' was not found "
+                f"or has no {selected_for} format: {exc} Select another target with "
+                f"`rvs art select`, or clear it with `rvs art clear --format {selected_for}`."
+            )
         output.fatal(str(exc))
     return profile_name, account, target, formats
 
@@ -348,30 +379,27 @@ def default_mirror_applies(
     )
 
 
-def default_official_cache(remotes: list[dict], kind: str) -> dict | None:
-    """Return the account's cache of the default official source for *kind*.
+def pick_default_official(items: list[dict], kind: str, name: Callable[[dict], str]) -> dict | None:
+    """Return the item of *kind* that Ravenstash marks as the default official one.
 
-    Ravenstash marks that cache with ``is_default``. Without a marked cache (a
-    server that predates the marker, or reports it before its backend does), the
-    default source's well-known name is used instead.
+    ``is_default`` is true for the default, false for the others, and absent or
+    null from a server that cannot tell; only then is the well-known default
+    name of the format used.
     """
-    official = [
-        item
-        for item in remotes
-        if item.get("source_type") == "official" and item.get("format") == kind
-    ]
-    marked = [item for item in official if item.get("is_default") is True]
+    candidates = [item for item in items if item.get("format") == kind]
+    marked = [item for item in candidates if item.get("is_default") is True]
     if marked:
         return marked[0]
+    if any(item.get("is_default") is not None for item in candidates):
+        return None
     fallback = DEFAULT_OFFICIAL_SOURCES.get(cast("PackageFormat", kind))
-    return next(
-        (
-            item
-            for item in official
-            if fallback is not None and remote_public_name(item) == fallback
-        ),
-        None,
-    )
+    return next((item for item in candidates if name(item) == fallback), None)
+
+
+def default_official_cache(remotes: list[dict], kind: str) -> dict | None:
+    """Return the account's cache of the default official source for *kind*."""
+    official = [item for item in remotes if item.get("source_type") == "official"]
+    return pick_default_official(official, kind, remote_public_name)
 
 
 def default_mirror_target(
@@ -387,14 +415,16 @@ def default_mirror_target(
     return _remote_target(remote, "official_cache") if remote is not None else None
 
 
-def no_selection_message(kind: str) -> str:
+def no_selection_message(kind: str, target_flag: str = "--target") -> str:
     if kind == "oci":
         return (
             "Container images and Helm charts need a private repository with the oci "
             "format. Run `rvs art select NAMESPACE/REPOSITORY`, pass --rvs-target, or "
             "create a repository in the Ravenstash dashboard."
         )
-    return f"No {kind} repository or mirror is selected. Pass --target or run `rvs art select`."
+    return (
+        f"No {kind} repository or mirror is selected. Pass {target_flag} or run `rvs art select`."
+    )
 
 
 def effective_target(
@@ -405,6 +435,7 @@ def effective_target(
     profile: str | None = None,
     account_ref: str | None = None,
     operations: tuple[PackageOperation, ...] = ("read",),
+    target_flag: str = "--target",
 ) -> tuple[str, cfg_mod.AccountContext, cfg_mod.ArtifactTarget]:
     package_format = _package_kind(kind)
     assert package_format is not None
@@ -427,18 +458,20 @@ def effective_target(
             profile=profile_name,
             account_ref=account.account_ref,
             kind=kind,
+            selected_for=cast("cfg_mod.Format", kind),
+            selection_display=saved.display_selector,
         )
     if not default_mirror_applies(account, kind, operations):
         if set(operations) - {"read"}:
             output.fatal(
-                f"No {kind} repository is selected. Mirrors are read-only; pass --target "
+                f"No {kind} repository is selected. Mirrors are read-only; pass {target_flag} "
                 "or run `rvs art select NAMESPACE/REPOSITORY` to choose a private repository."
             )
-        output.fatal(no_selection_message(kind))
+        output.fatal(no_selection_message(kind, target_flag))
     try:
         mirror = default_mirror_target(ApiClient.from_profile(profile_name), account, kind)
-    except (ApiError, KeyError, TypeError, ValueError) as exc:
-        output.fatal(str(exc))
+    except (ApiError, httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        output.fatal(f"Could not look up the default {kind} mirror: {exc}")
     if mirror is None:
         output.fatal(
             f"No {kind} target is selected and this account has no default {kind} mirror. "
@@ -491,6 +524,7 @@ def registry_context(
     account_ref: str | None = None,
     require_private: bool = False,
     operations: tuple[PackageOperation, ...] = ("read",),
+    target_flag: str = "--target",
 ) -> RegistryContext:
     profile_name, account, selected = effective_target(
         kind=kind,
@@ -498,6 +532,7 @@ def registry_context(
         repo=repo,
         profile=profile,
         account_ref=account_ref,
+        target_flag=target_flag,
         operations=operations,
     )
     if require_private and selected.target_type != "repository":

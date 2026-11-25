@@ -1,7 +1,7 @@
 """Read-only discovery shared by endpoint, reference, token and setup commands."""
 
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from .. import config as cfg
 from ..account.commands import acting_account_ref, resolve_account
@@ -22,6 +22,10 @@ from .targets import (
     resolve_repository_entry,
     token_scope_hint,
 )
+
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 @dataclass(frozen=True)
@@ -102,19 +106,33 @@ class Discovery:
 
 
 def selected_target_for(
-    profile_name: str, account_ref: str, kind: str | None
+    profile_name: str,
+    account_ref: str,
+    kind: str | None,
+    kinds: Sequence[str] = (),
 ) -> cfg.ArtifactTarget:
-    """Return the selected target for *kind*, or the one target selected for every format.
+    """Return the target selected for *kind* (or for all of *kinds*, which must agree),
+    or else the one target selected for every format.
 
     Discovery prints addresses and templates meant to be kept, so it never falls
     back to a default mirror: the target is always one the user chose.
     """
     selections = cfg.selected_artifact_targets(profile_name, account_ref)
-    if kind is not None:
-        saved = selections.get(cast("cfg.Format", kind))
-        if saved is None:
-            raise ValueError(f"No {kind} target is selected. Pass --target or run rvs art select.")
-        return saved
+    wanted = [kind] if kind is not None else list(kinds)
+    if wanted:
+        chosen: dict[str, cfg.ArtifactTarget] = {}
+        for item in wanted:
+            saved = selections.get(cast("cfg.Format", item))
+            if saved is None:
+                raise ValueError(
+                    f"No {item} target is selected. Pass --target or run rvs art select."
+                )
+            chosen[saved.stable_selector] = saved
+        if len(chosen) > 1:
+            raise ValueError(
+                f"Different targets are selected for {', '.join(wanted)}; pass --target."
+            )
+        return next(iter(chosen.values()))
     distinct = {item.stable_selector: item for item in selections.values()}
     if not distinct:
         raise ValueError("No target is selected. Pass --target or run rvs art select.")
@@ -126,7 +144,11 @@ def selected_target_for(
 
 
 def discover(
-    target: str | None, profile: str | None, account: str | None, kind: str | None = None
+    target: str | None,
+    profile: str | None,
+    account: str | None,
+    kind: str | None = None,
+    selection_formats: Sequence[str] = (),
 ) -> Discovery:
     profile_name = profile or cfg.current_profile_name()
     account_ref = (
@@ -137,7 +159,9 @@ def discover(
     if not account_ref:
         raise ValueError("No account is selected. Run rvs account switch.")
     if target is None:
-        target = selected_target_for(profile_name, account_ref, kind).stable_selector
+        target = selected_target_for(
+            profile_name, account_ref, kind, selection_formats
+        ).stable_selector
     spec = parse_target(target)
     client = ApiClient.from_profile(profile_name)
     if spec.target_type == "repository":

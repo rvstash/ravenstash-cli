@@ -90,9 +90,8 @@ def config(
         from .native_config import TOOLS
 
         with contextlib.redirect_stdout(sys.stderr):
-            found = discover(
-                target, profile, account, kind or TOOLS.get("mvn" if tool == "maven" else tool)
-            )
+            tool_kind = "oci" if tool == "oras" else TOOLS.get("mvn" if tool == "maven" else tool)
+            found = discover(target, profile, account, kind or tool_kind)
             result = render(found, tool, kind, access)
         if output.is_json():
             click.echo(json.dumps(result))

@@ -19,6 +19,7 @@ from .account.commands import (
     token_account_conflict,
     verified_identity,
 )
+from .artifacts.formats import PACKAGE_FORMATS
 
 
 # Everyday sources stay implicit; any other source is shown next to its value.
@@ -127,13 +128,10 @@ def _default_mirrors(selection: Selection) -> dict[str, str | None] | None:
     except ApiError, httpx.HTTPError, KeyError, TypeError, ValueError:
         return None
     result: dict[str, str | None] = {}
-    for kind in _PACKAGE_FORMATS:
+    for kind in PACKAGE_FORMATS:
         remote = default_official_cache(remotes, kind)
         result[kind] = remote_target_name(remote) if remote is not None else None
     return result
-
-
-_PACKAGE_FORMATS = ("pypi", "npm", "maven")
 
 
 def format_selections(selection: Selection) -> list[FormatSelection]:
@@ -149,7 +147,7 @@ def format_selections(selection: Selection) -> list[FormatSelection]:
         and selection.account.get("type") == "personal"
         and interactive_session()
     )
-    unselected = [kind for kind in _PACKAGE_FORMATS if kind not in selection.targets]
+    unselected = [kind for kind in PACKAGE_FORMATS if kind not in selection.targets]
     mirrors = _default_mirrors(selection) if personal and unselected else None
     rows: list[FormatSelection] = []
     for kind in cfg_mod.FORMAT_VALUES:
@@ -158,7 +156,7 @@ def format_selections(selection: Selection) -> list[FormatSelection]:
             rows.append(
                 FormatSelection(kind, "selected", target.display_selector, target.target_type)
             )
-        elif personal and kind in _PACKAGE_FORMATS and (mirrors is None or mirrors[kind]):
+        elif personal and kind in PACKAGE_FORMATS and (mirrors is None or mirrors[kind]):
             # An unknown mirror name still means the command will use the default.
             name = mirrors[kind] if mirrors is not None else None
             rows.append(FormatSelection(kind, "default_mirror", name, "official_cache"))
@@ -180,7 +178,11 @@ def format_rows(rows: list[FormatSelection]) -> dict[str, str]:
         if row.source == "selected":
             value = row.target or ""
         elif row.source == "default_mirror":
-            value = f"{row.target or 'default mirror'} (default mirror, automatic)"
+            value = (
+                f"{row.target} (default mirror, automatic)"
+                if row.target
+                else "default mirror, automatic (not checked)"
+            )
         else:
             value = "not selected"
         values[f"{row.format} target"] = value

@@ -1,6 +1,8 @@
 """The public format vocabulary and shared set-valued option parser."""
 
 FORMATS = ("pypi", "npm", "maven", "oci")
+# Formats with packages and Ravenstash-provided mirrors; OCI has neither.
+PACKAGE_FORMATS = ("pypi", "npm", "maven")
 
 
 def flatten_formats(values: list[str]) -> list[str]:

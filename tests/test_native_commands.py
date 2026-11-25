@@ -1383,7 +1383,10 @@ def test_missing_target_never_launches_or_infers_from_native_config(
     _capture_run(monkeypatch, calls)
     result = runner.invoke(app, [tool, *args])
     assert result.exit_code != 0
-    assert "No Ravenstash target is selected" in result.output
+    assert (
+        "No Ravenstash target is selected" in result.output
+        or "Publishing needs a private repository" in result.output
+    )
     assert not calls
 
 

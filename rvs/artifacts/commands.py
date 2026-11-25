@@ -38,13 +38,13 @@ from ..status import (
 )
 from .auth_commands import app as native_auth_app
 from .evidence_commands import app as evidence_app
-from .formats import FORMATS, flatten_formats
+from .formats import FORMATS, PACKAGE_FORMATS, flatten_formats
 from .oci_commands import app as oci_app
 from .primitives import endpoint, native_app, reference
 from .targets import (
     DEFAULT_OFFICIAL_SOURCES,
-    PackageFormat,
     parse_target,
+    pick_default_official,
     remote_target_name,
     repository_display_name,
     repository_formats,
@@ -87,7 +87,6 @@ app.add_typer(native_app, name="native")
 app.command("endpoint")(endpoint)
 app.command("reference")(reference)
 
-_PACKAGE_KINDS = ("pypi", "npm", "maven")
 _REPOSITORY_NAME_HELP = "Name-based target (namespace/repository) or ID-based target (in/ar_...)."
 _PACKAGE_TARGET_HELP = (
     "Repository (namespace/repository or in/ar_...); defaults to the target chosen "
@@ -193,9 +192,19 @@ def target_select(
     chosen = requested or list(formats)
     if not chosen:
         output.fatal(f"'{selected.display_selector}' has no enabled format to select.")
+    # A format still pointing at this target although the target lacks it (a
+    # schema-1 selection migrated to every format, or a removed format) can
+    # never work; selecting the target again forgets it.
+    current = cfg_mod.selected_artifact_targets(profile_name, selected_account.account_ref)
+    stale: tuple[cfg_mod.Format, ...] = tuple(
+        kind
+        for kind, saved in current.items()
+        if kind not in formats and saved.stable_selector == selected.stable_selector
+    )
     try:
         cfg_mod.update_selected_artifact_targets(
             select={kind: replace(selected, format=kind) for kind in chosen},
+            clear=stale,
             profile=profile_name,
             account_ref=selected_account.account_ref,
         )
@@ -205,6 +214,11 @@ def target_select(
         f"Selected '{selected.display_selector}' for {_format_list(chosen)} in "
         f"{account_display_name(selected_account)}."
     )
+    if stale:
+        output.note(
+            f"Cleared the {_format_list(list(stale))} selection: "
+            f"'{selected.display_selector}' has no such format."
+        )
 
 
 @app.command("status")
@@ -272,7 +286,7 @@ def _require_kind(kind: str) -> cfg_mod.Format:
 
 
 def _require_package_kind(kind: str) -> cfg_mod.Format:
-    if kind not in _PACKAGE_KINDS:
+    if kind not in PACKAGE_FORMATS:
         output.fatal(
             "Package/version commands and private mirrors support only pypi, npm, "
             "and maven. Use rvs docker, rvs helm, or rvs oras for OCI content."
@@ -399,7 +413,7 @@ def _package_lane(
     # format a command implies is reported as such rather than as not found.
     repository = _resolve_repository_entry(repo, profile, kind=kind, account_ref=account_ref)
     display = repository_target_name(repository)
-    formats = [item for item in repository_formats(repository) if item in _PACKAGE_KINDS]
+    formats = [item for item in repository_formats(repository) if item in PACKAGE_FORMATS]
     wanted = kind or only
     if wanted is not None:
         if wanted not in formats:
@@ -437,7 +451,7 @@ def _selected_package_repository(
             )
         present = {cast("cfg_mod.Format", wanted): saved}
     else:
-        package = {kind: target for kind, target in selections.items() if kind in _PACKAGE_KINDS}
+        package = {kind: target for kind, target in selections.items() if kind in PACKAGE_FORMATS}
         present = {
             kind: target for kind, target in package.items() if target.target_type == "repository"
         }
@@ -839,14 +853,7 @@ def remote_list(
 
 def _default_official_source(sources: list[dict], kind: str) -> dict | None:
     """Return the official source Ravenstash marks as the default for *kind*."""
-    candidates = [item for item in sources if item.get("format") == kind]
-    marked = [item for item in candidates if item.get("is_default") is True]
-    if marked:
-        return marked[0]
-    # Without a marked source (a server that predates the marker, or one that
-    # reports it before its backend does), use the well-known default names.
-    fallback = DEFAULT_OFFICIAL_SOURCES.get(cast("PackageFormat", kind))
-    return next((item for item in candidates if item.get("ref") == fallback), None)
+    return pick_default_official(sources, kind, lambda item: str(item.get("ref")))
 
 
 def _existing_official_cache(client: ApiClient, account_ref: str, source: dict) -> dict | None:
@@ -919,10 +926,7 @@ def remote_create(
             if max_age_hours is not None:
                 payload["max_age_hours"] = max_age_hours
             try:
-                response = client.post(artifacts_path("remote-caches"), json=payload)
-                item = response.json()
-                # Ravenstash answers 200 with the account's existing mirror.
-                existed = getattr(response, "status_code", 201) == 200
+                item = client.post(artifacts_path("remote-caches"), json=payload).json()
             except ApiError as exc:
                 # Older servers refuse a second mirror of the same source.
                 if exc.status_code != 409:

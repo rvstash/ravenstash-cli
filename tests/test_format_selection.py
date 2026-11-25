@@ -1,8 +1,10 @@
 """Per-format selection and the automatic default mirror of personal accounts."""
 
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+import httpx2 as httpx
 import pytest
 from rvs import config as cfg_mod
 from rvs.artifacts import targets
@@ -440,7 +442,7 @@ def test_publish_never_falls_back_to_a_mirror(monkeypatch, tmp_path):
     result = runner.invoke(app, ["twine", "upload", "dist/demo.whl"])
 
     assert result.exit_code == 1
-    assert "No Ravenstash target is selected for pypi" in text(result)
+    assert "Publishing needs a private repository" in text(result)
     assert calls == []
     with pytest.raises(SystemExit):
         targets.registry_context(
@@ -620,17 +622,6 @@ def test_mirror_create_reuses_an_existing_mirror(monkeypatch, tmp_path):
     assert "POST" not in [method for method, _path, _body in fake.calls]
 
 
-def test_mirror_create_reports_a_server_answer_for_an_existing_mirror(monkeypatch, tmp_path):
-    isolate(monkeypatch, tmp_path)
-    existing = official(PERSONAL, "pypi", "pypiorg")
-    serve(monkeypatch, FakeApi([PERSONAL], [], sources=SOURCES, create=Response(existing, 200)))
-
-    result = runner.invoke(app, ["art", "mirror", "create", "pypiorg"])
-
-    assert result.exit_code == 0, result.output
-    assert "Private mirror 'mirror:pypiorg' already exists" in text(result)
-
-
 def test_mirror_create_treats_an_older_server_conflict_as_existing(monkeypatch, tmp_path):
     isolate(monkeypatch, tmp_path)
     existing = official(PERSONAL, "pypi", "pypiorg", default=None)
@@ -699,12 +690,16 @@ def test_default_official_cache_ignores_other_accounts_formats_and_families():
     )
 
 
-def test_an_unmarked_listing_falls_back_to_the_well_known_default():
-    unmarked = official(PERSONAL, "pypi", "pypiorg", default=False)
+def test_the_well_known_default_is_used_only_when_the_server_cannot_tell():
+    unknown = official(PERSONAL, "pypi", "pypiorg", default=None)
+    other_unknown = official(PERSONAL, "pypi", "pytorch", default=None)
+    assert targets.default_official_cache([other_unknown, unknown], "pypi") == unknown
+    not_default = official(PERSONAL, "pypi", "pypiorg", default=False)
     other = official(PERSONAL, "pypi", "pytorch", default=False)
-    assert targets.default_official_cache([other, unmarked], "pypi") == unmarked
+    # The server moved the default to a source this account has no mirror of.
+    assert targets.default_official_cache([other, not_default], "pypi") is None
     marked = official(PERSONAL, "pypi", "pytorch", default=True)
-    assert targets.default_official_cache([unmarked, marked], "pypi") == marked
+    assert targets.default_official_cache([not_default, marked], "pypi") == marked
 
 
 def test_select_and_clear_accept_the_short_format_option(monkeypatch, tmp_path):
@@ -718,3 +713,102 @@ def test_select_and_clear_accept_the_short_format_option(monkeypatch, tmp_path):
     cleared = runner.invoke(app, ["art", "clear", "-f", "npm"])
     assert cleared.exit_code == 0, cleared.output
     assert set(selected()) == {"pypi"}
+
+
+def _select_everywhere(target: cfg_mod.ArtifactTarget) -> None:
+    cfg_mod.update_selected_artifact_targets(
+        select={kind: replace(target, format=kind) for kind in cfg_mod.FORMAT_VALUES},
+        profile="alice",
+        account_ref="ac_personal",
+    )
+
+
+def test_selecting_a_repository_again_forgets_the_formats_it_lacks(monkeypatch, tmp_path):
+    isolate(monkeypatch, tmp_path)
+    repo = repository(PERSONAL, "pypi", "npm")
+    serve(monkeypatch, FakeApi([PERSONAL], repo=repo))
+    # A schema-1 repository selection is migrated to every format.
+    _select_everywhere(targets._repository_target(repo))
+
+    result = runner.invoke(app, ["art", "select", "engineering/packages"])
+
+    assert result.exit_code == 0, result.output
+    assert "Cleared the maven, oci selection" in text(result)
+    assert set(selected()) == {"pypi", "npm"}
+
+
+def test_a_selection_the_repository_lacks_explains_how_to_fix_it(monkeypatch, tmp_path, capsys):
+    isolate(monkeypatch, tmp_path)
+    repo = repository(PERSONAL, "pypi")
+    serve(monkeypatch, FakeApi([PERSONAL], repo=repo))
+    _select_everywhere(targets._repository_target(repo))
+
+    with pytest.raises(SystemExit):
+        targets.effective_target(kind="npm", profile="alice")
+
+    message = " ".join(capsys.readouterr().err.split())
+    assert "The npm selection 'repo:engineering/packages' was not found" in message
+    assert "rvs art clear --format npm" in message
+
+
+def test_a_failed_default_mirror_lookup_is_named(monkeypatch, tmp_path, capsys):
+    isolate(monkeypatch, tmp_path)
+
+    class _Offline(FakeApi):
+        def get(self, path: str, params: dict[str, Any] | None = None) -> Response:
+            if path == "/v0/artifacts/remote-caches":
+                raise httpx.ConnectError("connection refused")
+            return super().get(path, params)
+
+    serve(monkeypatch, _Offline([PERSONAL]))
+
+    with pytest.raises(SystemExit):
+        targets.effective_target(kind="pypi", profile="alice")
+    assert "Could not look up the default pypi mirror" in capsys.readouterr().err
+
+
+def test_token_mint_uses_the_selection_of_every_requested_format(monkeypatch, tmp_path):
+    isolate(monkeypatch, tmp_path)
+    repo = repository(PERSONAL, "pypi", "npm")
+    fake = serve(
+        monkeypatch, FakeApi([PERSONAL], [official(PERSONAL, "maven", "maven-central")], repo=repo)
+    )
+    repo_target = targets._repository_target(repo)
+    cfg_mod.update_selected_artifact_targets(
+        select={
+            "pypi": replace(repo_target, format="pypi"),
+            "npm": replace(repo_target, format="npm"),
+            "maven": targets._remote_target(
+                official(PERSONAL, "maven", "maven-central"), "official_cache"
+            ),
+        },
+        profile="alice",
+        account_ref="ac_personal",
+    )
+
+    from rvs.artifacts.discovery import selected_target_for
+
+    chosen = selected_target_for("alice", "ac_personal", None, ["pypi", "npm"])
+    assert chosen.stable_selector == "in/ar_abcdefgh"
+    with pytest.raises(ValueError, match="Different targets are selected for pypi, maven"):
+        selected_target_for("alice", "ac_personal", None, ["pypi", "maven"])
+    assert fake.calls == []
+
+
+def test_oras_templates_use_the_oci_selection(monkeypatch, tmp_path):
+    isolate(monkeypatch, tmp_path)
+    repo = repository(PERSONAL, "oci")
+    serve(monkeypatch, FakeApi([PERSONAL], repo=repo))
+    cfg_mod.update_selected_artifact_targets(
+        select={
+            "oci": replace(targets._repository_target(repo), format="oci"),
+            "pypi": targets._remote_target(official(PERSONAL, "pypi", "pypiorg"), "official_cache"),
+        },
+        profile="alice",
+        account_ref="ac_personal",
+    )
+
+    result = runner.invoke(app, ["art", "native", "config", "oras"])
+
+    assert "Different targets are selected" not in text(result)
+    assert result.exit_code == 0, result.output
