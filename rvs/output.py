@@ -76,6 +76,14 @@ def info(msg: str) -> None:
     console.print(_message("->", "cyan", msg))
 
 
+def note(msg: str) -> None:
+    """Print an informational line on stderr, keeping stdout for native tools."""
+    if _json_enabled:
+        _emit_json({"level": "info", "message": msg}, err=True)
+        return
+    err_console.print(_message("->", "cyan", msg))
+
+
 def warn(msg: str) -> None:
     if _json_enabled:
         _emit_json({"level": "warning", "message": msg}, err=True)

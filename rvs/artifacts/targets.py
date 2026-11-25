@@ -256,6 +256,20 @@ def resolve_target(
     account_ref: str | None = None,
     kind: str | None = None,
 ) -> tuple[str, cfg_mod.AccountContext, cfg_mod.ArtifactTarget]:
+    profile_name, account, target, _ = resolve_target_formats(
+        value, profile=profile, account_ref=account_ref, kind=kind
+    )
+    return profile_name, account, target
+
+
+def resolve_target_formats(
+    value: str,
+    *,
+    profile: str | None = None,
+    account_ref: str | None = None,
+    kind: str | None = None,
+) -> tuple[str, cfg_mod.AccountContext, cfg_mod.ArtifactTarget, tuple[cfg_mod.Format, ...]]:
+    """Resolve a target and return the formats it has: a mirror has exactly one."""
     spec = parse_target(value)
     profile_name = profile or cfg_mod.current_profile_name()
     if kind is not None and kind not in {"pypi", "npm", "maven", "oci"}:
@@ -279,6 +293,11 @@ def resolve_target(
                 activate=False,
             )
             target = _repository_target(repository)
+            formats: tuple[cfg_mod.Format, ...] = tuple(
+                cast("cfg_mod.Format", item)
+                for item in repository_formats(repository)
+                if item in FORMATS
+            )
         else:
             profile_name, account = ensure_active_account(profile_name, account_ref)
             remotes = collection_all(
@@ -295,9 +314,88 @@ def resolve_target(
                     f"Package target '{value}' is ambiguous across {kinds}. Pass --format."
                 )
             target = _remote_target(matches[0], spec.target_type)
+            formats = (cast("cfg_mod.Format", target.format),)
     except (ApiError, KeyError, TypeError, ValueError) as exc:
         output.fatal(str(exc))
-    return profile_name, account, target
+    return profile_name, account, target, formats
+
+
+def interactive_session() -> bool:
+    """Return whether the CLI acts for a signed-in person rather than automation.
+
+    Every RVS_TOKEN credential is treated as automation, so CI keeps explicit
+    routing even when the token belongs to a personal account.
+    """
+    return "RVS_TOKEN" not in os.environ
+
+
+def default_mirror_applies(
+    account: cfg_mod.AccountContext,
+    kind: str,
+    operations: tuple[PackageOperation, ...],
+) -> bool:
+    """Return whether an unselected format may use the default official mirror.
+
+    Only read-only package commands of a personal account in an interactive
+    session do: organizations control their members' sources, automation stays
+    explicit, mirrors cannot publish, and container images have no mirror.
+    """
+    return (
+        kind in DEFAULT_OFFICIAL_SOURCES
+        and set(operations) <= {"read"}
+        and account.account_type == "personal"
+        and interactive_session()
+    )
+
+
+def default_official_cache(remotes: list[dict], kind: str) -> dict | None:
+    """Return the account's cache of the default official source for *kind*.
+
+    Ravenstash marks that cache with ``is_default``. A server that predates the
+    marker is matched by the default source's well-known name instead.
+    """
+    official = [
+        item
+        for item in remotes
+        if item.get("source_type") == "official" and item.get("format") == kind
+    ]
+    marked = [item for item in official if item.get("is_default") is True]
+    if marked:
+        return marked[0]
+    if any("is_default" in item for item in official):
+        return None
+    fallback = DEFAULT_OFFICIAL_SOURCES.get(cast("PackageFormat", kind))
+    return next(
+        (
+            item
+            for item in official
+            if fallback is not None and remote_public_name(item) == fallback
+        ),
+        None,
+    )
+
+
+def default_mirror_target(
+    client: ApiClient, account: cfg_mod.AccountContext, kind: str
+) -> cfg_mod.ArtifactTarget | None:
+    """Look up the account's default official mirror for *kind*; never create one."""
+    remotes = collection_all(
+        client,
+        artifacts_path("remote-caches"),
+        {"account_ref": account.account_ref, "format": kind},
+    )
+    remote = default_official_cache(remotes, kind)
+    return _remote_target(remote, "official_cache") if remote is not None else None
+
+
+def no_selection_message(kind: str) -> str:
+    if kind == "oci":
+        return (
+            "Container images and Helm charts need a private repository with the oci "
+            "format. Run `rvs art select NAMESPACE/REPOSITORY`, pass --rvs-target, or "
+            "create a repository in the Ravenstash dashboard."
+        )
+    return f"No {kind} repository or mirror is selected. Pass --target or run `rvs art select`."
 
 
 def effective_target(
@@ -307,6 +405,7 @@ def effective_target(
     repo: str | None = None,
     profile: str | None = None,
     account_ref: str | None = None,
+    operations: tuple[PackageOperation, ...] = ("read",),
 ) -> tuple[str, cfg_mod.AccountContext, cfg_mod.ArtifactTarget]:
     package_format = _package_kind(kind)
     assert package_format is not None
@@ -320,21 +419,38 @@ def effective_target(
             account_ref=account.account_ref,
             kind=kind,
         )
-    saved = cfg_mod.selected_artifact_target(profile_name, account.account_ref)
+    saved = cfg_mod.selected_artifact_target(
+        profile_name, account.account_ref, cast("cfg_mod.Format", kind)
+    )
     if saved is not None:
-        if saved.format is not None and saved.format != kind:
-            output.fatal(
-                f"Selected target '{saved.display_selector}' is for {saved.format}, not {kind}."
-            )
         return resolve_target(
             saved.stable_selector,
             profile=profile_name,
             account_ref=account.account_ref,
             kind=kind,
         )
-    output.fatal(
-        f"No {kind} repository or mirror is selected. Pass --target or run `rvs art select`."
+    if not default_mirror_applies(account, kind, operations):
+        if set(operations) - {"read"}:
+            output.fatal(
+                f"No {kind} repository is selected. Mirrors are read-only; pass --target "
+                "or run `rvs art select NAMESPACE/REPOSITORY` to choose a private repository."
+            )
+        output.fatal(no_selection_message(kind))
+    try:
+        mirror = default_mirror_target(ApiClient.from_profile(profile_name), account, kind)
+    except (ApiError, KeyError, TypeError, ValueError) as exc:
+        output.fatal(str(exc))
+    if mirror is None:
+        output.fatal(
+            f"No {kind} target is selected and this account has no default {kind} mirror. "
+            f"Run `rvs art mirror create --format {kind} --select`, or select a "
+            "repository with `rvs art select`."
+        )
+    output.note(
+        f"Using {mirror.display_selector}, the default {kind} mirror (no {kind} target "
+        "selected; run `rvs art select` to change)."
     )
+    return profile_name, account, mirror
 
 
 def expected_repository_target(selected: cfg_mod.ArtifactTarget) -> dict[str, object]:
@@ -383,6 +499,7 @@ def registry_context(
         repo=repo,
         profile=profile,
         account_ref=account_ref,
+        operations=operations,
     )
     if require_private and selected.target_type != "repository":
         output.fatal(f"'{selected.display_selector}' is read-only; select a private repository.")

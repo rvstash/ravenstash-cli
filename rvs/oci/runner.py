@@ -19,7 +19,11 @@ from .. import output
 from ..account.commands import acting_account_ref, resolve_account
 from ..api import repository_mint_token_path
 from ..artifacts.routing import native_path as opaque_native_path
-from ..artifacts.targets import expected_repository_target, resolve_target
+from ..artifacts.targets import (
+    expected_repository_target,
+    no_selection_message,
+    resolve_target,
+)
 from ..artifacts.trash import NATIVE_MANIFEST_DELETE_NOTICE
 from ..auth.token_format import STATIC_NATIVE_DURATION_SECONDS, validate_public_token
 from ..client import ApiClient, ApiError
@@ -122,14 +126,15 @@ def resolve_route(
     if account_ref is None and options.account is not None:
         account_ref = str(resolve_account(options.account, profile_name)["ref"])
     account_ref = account_ref or acting_account_ref(profile_name)
-    selected = cfg_mod.selected_artifact_target(profile_name, account_ref)
+    selected = cfg_mod.selected_artifact_target(profile_name, account_ref, kind)
     repo_ref = options.target
     if repo_ref is None and selected is not None:
         if selected.target_type != "repository":
             output.fatal("OCI commands require a private repository target.")
         repo_ref = selected.stable_selector
     if not repo_ref:
-        output.fatal(f"No {kind} repository selected. Pass --rvs-target or run `rvs art select`.")
+        # Container images have no Ravenstash mirror, so nothing is chosen by default.
+        output.fatal(no_selection_message(kind))
     _, account, target = resolve_target(
         repo_ref,
         profile=profile_name,

@@ -142,7 +142,7 @@ account_ref = "personal-{profile}"
         for profile in profiles
     )
     config_file.write_text(
-        f'schema_version = 1\ndefault_profile = "{profiles[0]}"\n\n{profile_tables}\n',
+        f'schema_version = 2\ndefault_profile = "{profiles[0]}"\n\n{profile_tables}\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(cfg_mod, "CONFIG_DIR", config_dir)
@@ -212,14 +212,14 @@ def test_account_and_official_cache_selection_are_visible_and_clearable(
 
     assert switched.exit_code == 0, switched.output
     assert selected.exit_code == 0, selected.output
-    saved = cfg_mod.selected_artifact_target("alice", "acme")
+    saved = cfg_mod.selected_artifact_target("alice", "acme", "pypi")
     assert saved is not None
     assert saved.target_type == "official_cache"
     assert saved.stable_selector == "mirror:rc_pypi2222"
 
     cleared = runner.invoke(app, ["art", "clear"])
     assert cleared.exit_code == 0, cleared.output
-    assert cfg_mod.selected_artifact_target("alice", "acme") is None
+    assert cfg_mod.selected_artifact_target("alice", "acme", "pypi") is None
 
 
 def test_handle_selection_preserves_account_ref_and_canonical_case(monkeypatch, tmp_path):
@@ -301,7 +301,7 @@ def test_custom_cache_kind_collision_requires_disambiguation(monkeypatch, tmp_pa
     assert ambiguous.exit_code == 1
     assert "ambiguous" in ambiguous.output
     assert selected.exit_code == 0, selected.output
-    assert cfg_mod.selected_artifact_target("alice", "personal-alice").format == "pypi"
+    assert cfg_mod.selected_artifact_target("alice", "personal-alice", "pypi").format == "pypi"
 
 
 def test_two_login_profiles_keep_separate_actor_state_for_the_same_org(
@@ -323,8 +323,8 @@ def test_two_login_profiles_keep_separate_actor_state_for_the_same_org(
     )
     assert runner.invoke(app, ["account", "switch", "org:acme", "--profile", "bob"]).exit_code == 0
 
-    assert cfg_mod.selected_artifact_target("alice", "acme") is not None
-    assert cfg_mod.selected_artifact_target("bob", "acme") is None
+    assert cfg_mod.selected_artifact_target("alice", "acme", "pypi") is not None
+    assert cfg_mod.selected_artifact_target("bob", "acme", "pypi") is None
 
 
 def test_one_shot_account_does_not_switch_the_active_account(monkeypatch, tmp_path: Path) -> None:
@@ -399,7 +399,7 @@ def test_native_wrapper_uses_selected_cache_and_one_shot_does_not_mutate_it(
         "https://mirror.pypi.rvsta.sh/c/piwheels/simple/",
         "numpy",
     ]
-    assert cfg_mod.selected_artifact_target("alice", "personal-alice").display_selector == (
+    assert cfg_mod.selected_artifact_target("alice", "personal-alice", "pypi").display_selector == (
         "mirror:pypiorg"
     )
 
@@ -498,9 +498,9 @@ def test_cross_account_selection_stays_in_current_context_and_uses_owner_credent
     assert result.exit_code == 0, result.output
     assert "another account" in result.output
     assert cfg_mod.current_account_ref("alice") == "personal-alice"
-    saved = cfg_mod.selected_artifact_target("alice", "personal-alice")
+    saved = cfg_mod.selected_artifact_target("alice", "personal-alice", "pypi")
     assert saved is not None and saved.account_ref == "org-foreign"
-    assert cfg_mod.selected_artifact_target("alice", "org-foreign") is None
+    assert cfg_mod.selected_artifact_target("alice", "org-foreign", "pypi") is None
     context = registry_context(kind="pypi", profile="alice")
     assert context.account_ref == "org-foreign"
     assert context.token == "rvs_sltCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCA"

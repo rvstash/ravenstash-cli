@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from rvs import config as cfg_mod
@@ -63,7 +64,23 @@ ACME = {
 }
 
 
-def _serve(monkeypatch, identity: dict[str, Any], items: list[dict[str, Any]]) -> list[str]:
+PYPI_DEFAULT = {
+    "ref": "rc_23456789",
+    "account": {"ref": "personal-user", "handle": "avery", "type": "personal"},
+    "format": "pypi",
+    "source_type": "official",
+    "name": "PyPI",
+    "official_source_ref": "pypiorg",
+    "is_default": True,
+}
+
+
+def _serve(
+    monkeypatch,
+    identity: dict[str, Any],
+    items: list[dict[str, Any]],
+    remotes: list[dict[str, Any]] | None = None,
+) -> list[str]:
     calls: list[str] = []
 
     class _Client:
@@ -72,6 +89,8 @@ def _serve(monkeypatch, identity: dict[str, Any], items: list[dict[str, Any]]) -
             calls.append(path)
             if path == "/v0/platform/me":
                 return _Response(identity)
+            if path == "/v0/artifacts/remote-caches":
+                return _Response({"items": remotes or [], "next_cursor": None})
             assert path == "/v0/platform/accounts"
             return _Response({"items": items, "next_cursor": None})
 
@@ -87,7 +106,7 @@ def _isolate_config(monkeypatch, tmp_path: Path) -> None:
     config_file = config_dir / "config.toml"
     config_file.write_text(
         """
-schema_version = 1
+schema_version = 2
 default_profile = "work"
 
 [profiles.work]
@@ -101,6 +120,34 @@ account_ref = "personal-user"
     monkeypatch.setattr(cfg_mod, "PROFILE_ENV_FILE", config_dir / "profiles.env")
     for key in ("RVS_PROFILE", "RVS_ACCOUNT_REF", "RVS_SESSION_ID"):
         monkeypatch.delenv(key, raising=False)
+
+
+LIBS = cfg_mod.ArtifactTarget(
+    target_type="repository",
+    account_ref="acme",
+    stable_selector="in/ar_23456789",
+    display_selector="repo:team/libs",
+    namespace_realm="internal",
+    namespace_ref="in_23456789",
+    namespace_name_cache="team",
+    repository_ref="ar_23456789",
+    repository_name_cache="libs",
+)
+
+
+def _select(
+    target: cfg_mod.ArtifactTarget,
+    *kinds: cfg_mod.Format,
+    account_ref: str = "acme",
+    account: dict[str, Any] | None = None,
+) -> None:
+    if account is not None:
+        cfg_mod.cache_account(profile="work", account=account)
+    cfg_mod.update_selected_artifact_targets(
+        select={kind: replace(target, format=kind) for kind in kinds},
+        profile="work",
+        account_ref=account_ref,
+    )
 
 
 def _row(output: str, label: str) -> str:
@@ -121,19 +168,35 @@ def test_status_names_the_person_and_selections_without_writing_config(
     tmp_path: Path,
 ) -> None:
     _isolate_config(monkeypatch, tmp_path)
-    calls = _serve(monkeypatch, _identity(), [AVERY, ACME])
+    calls = _serve(monkeypatch, _identity(), [AVERY, ACME], [PYPI_DEFAULT])
     before = cfg_mod.CONFIG_FILE.read_text(encoding="utf-8")
 
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
-    assert calls == ["/v0/platform/me", "/v0/platform/accounts"]
+    assert calls == [
+        "/v0/platform/me",
+        "/v0/platform/accounts",
+        "/v0/artifacts/remote-caches",
+    ]
     assert "user:avery (Avery Example)" in _row(result.output, "Signed in as")
     assert "developer@example.test" not in result.output
     assert _row(result.output, "Profile").split() == ["Profile", "work"]
     assert "user:avery (Avery Example)" in _row(result.output, "Account")
-    assert "not selected" in _row(result.output, "Artifacts target")
-    labels = ("Profile", "Signed in as", "Account", "Artifacts target", "Ravenstash API")
+    # A personal account's unselected package formats use its default mirror.
+    assert "mirror:pypiorg (default mirror, automatic)" in _row(result.output, "pypi target")
+    assert "not selected" in _row(result.output, "npm target")
+    assert "not selected" in _row(result.output, "oci target")
+    labels = (
+        "Profile",
+        "Signed in as",
+        "Account",
+        "pypi target",
+        "npm target",
+        "maven target",
+        "oci target",
+        "Ravenstash API",
+    )
     rows = [line.split("  ")[0] for line in result.output.splitlines() if line.startswith(labels)]
     # The profile comes first: it decides which sign-in and selections apply.
     assert rows == list(labels)
@@ -145,24 +208,9 @@ def test_status_names_the_person_and_selections_without_writing_config(
 def test_status_shows_the_target_and_non_default_sources(monkeypatch, tmp_path: Path) -> None:
     _isolate_config(monkeypatch, tmp_path)
     cfg_mod.set_active_account(profile="work", account=ACME)
-    cfg_mod.set_selected_artifact_target(
-        cfg_mod.ArtifactTarget(
-            target_type="repository",
-            account_ref="acme",
-            stable_selector="in/ar_23456789",
-            display_selector="repo:team/libs",
-            format="pypi",
-            namespace_realm="internal",
-            namespace_ref="in_23456789",
-            namespace_name_cache="team",
-            repository_ref="ar_23456789",
-            repository_name_cache="libs",
-        ),
-        profile="work",
-        account_ref="acme",
-    )
+    _select(LIBS, "pypi")
     monkeypatch.setenv("RVS_ACCOUNT_REF", "acme")
-    _serve(monkeypatch, _identity(), [AVERY, ACME])
+    calls = _serve(monkeypatch, _identity(), [AVERY, ACME], [PYPI_DEFAULT])
 
     result = runner.invoke(app, ["status", "--profile", "work"])
 
@@ -170,20 +218,25 @@ def test_status_shows_the_target_and_non_default_sources(monkeypatch, tmp_path: 
     assert "work · command option (--profile)" in _row(result.output, "Profile")
     account = _row(result.output, "Account")
     assert "org:acme (Acme Incorporated) · environment (RVS_ACCOUNT_REF)" in account
-    assert "repo:team/libs · pypi" in _row(result.output, "Artifacts target")
+    assert _row(result.output, "pypi target").split() == ["pypi", "target", "repo:team/libs"]
+    # Organizations never fall back to a default mirror, so nothing is looked up.
+    assert "not selected" in _row(result.output, "npm target")
+    assert "/v0/artifacts/remote-caches" not in calls
 
 
 def test_status_json_nests_targets_by_product(monkeypatch, tmp_path: Path) -> None:
     _isolate_config(monkeypatch, tmp_path)
     cfg_mod.set_active_account(profile="work", account=ACME)
-    cfg_mod.set_selected_artifact_target(
-        cfg_mod.ArtifactTarget(
-            target_type="official_cache",
-            account_ref="acme",
-            stable_selector="mirror:official-ref",
-            display_selector="mirror:pypiorg",
-            format="pypi",
-        ),
+    cfg_mod.update_selected_artifact_targets(
+        select={
+            "pypi": cfg_mod.ArtifactTarget(
+                target_type="official_cache",
+                account_ref="acme",
+                stable_selector="mirror:official-ref",
+                display_selector="mirror:pypiorg",
+                format="pypi",
+            )
+        },
         profile="work",
         account_ref="acme",
     )
@@ -208,7 +261,17 @@ def test_status_json_nests_targets_by_product(monkeypatch, tmp_path: Path) -> No
             "selected_by": "persisted profile",
         },
         "targets": {
-            "artifacts": {"target": "mirror:pypiorg", "type": "official_cache", "format": "pypi"}
+            "artifacts": {"target": "mirror:pypiorg", "type": "official_cache", "format": "pypi"},
+            "artifacts_by_format": {
+                "pypi": {
+                    "target": "mirror:pypiorg",
+                    "type": "official_cache",
+                    "source": "selected",
+                },
+                "npm": {"target": None, "type": None, "source": "none"},
+                "maven": {"target": None, "type": None, "source": "none"},
+                "oci": {"target": None, "type": None, "source": "none"},
+            },
         },
         "api_url": "https://api.work.example",
     }
@@ -294,26 +357,13 @@ def test_status_json_never_reports_the_sign_in_email(monkeypatch, tmp_path: Path
     assert "developer@example.test" not in result.output + as_json.output
 
 
-def test_art_status_leaves_a_command_chosen_format_empty(monkeypatch, tmp_path: Path) -> None:
+def test_art_status_reports_every_format_and_keeps_the_single_target_fields(
+    monkeypatch, tmp_path: Path
+) -> None:
     _isolate_config(monkeypatch, tmp_path)
     cfg_mod.set_active_account(profile="work", account=ACME)
-    cfg_mod.set_selected_artifact_target(
-        cfg_mod.ArtifactTarget(
-            target_type="repository",
-            account_ref="acme",
-            stable_selector="in/ar_23456789",
-            display_selector="repo:team/libs",
-            # A repository with several formats and no --format keeps it open.
-            format=None,
-            namespace_realm="internal",
-            namespace_ref="in_23456789",
-            namespace_name_cache="team",
-            repository_ref="ar_23456789",
-            repository_name_cache="libs",
-        ),
-        profile="work",
-        account_ref="acme",
-    )
+    # One repository selected for two formats has no single format.
+    _select(LIBS, "pypi", "npm")
     _serve(monkeypatch, _identity(), [AVERY, ACME])
     before = cfg_mod.CONFIG_FILE.read_text(encoding="utf-8")
 
@@ -322,8 +372,11 @@ def test_art_status_leaves_a_command_chosen_format_empty(monkeypatch, tmp_path: 
 
     assert result.exit_code == 0, result.output
     assert "org:acme (Acme Incorporated)" in _row(result.output, "Account")
-    assert "repo:team/libs" in _row(result.output, "Target")
-    assert _row(result.output, "Format").split() == ["Format", "-"]
+    assert "repo:team/libs" in _row(result.output, "pypi target")
+    assert "repo:team/libs" in _row(result.output, "npm target")
+    assert "not selected" in _row(result.output, "maven target")
+    selected = {"target": "repo:team/libs", "type": "repository", "source": "selected"}
+    unselected = {"target": None, "type": None, "source": "none"}
     assert json.loads(as_json.output)["values"] == {
         "account": {
             "ref": "acme",
@@ -334,8 +387,87 @@ def test_art_status_leaves_a_command_chosen_format_empty(monkeypatch, tmp_path: 
         "target": "repo:team/libs",
         "type": "repository",
         "format": None,
+        "formats": {
+            "pypi": selected,
+            "npm": selected,
+            "maven": unselected,
+            "oci": unselected,
+        },
     }
     assert cfg_mod.CONFIG_FILE.read_text(encoding="utf-8") == before
+
+
+def test_art_status_reports_no_single_target_when_formats_differ(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _isolate_config(monkeypatch, tmp_path)
+    _select(LIBS, "pypi", account_ref="personal-user", account=AVERY)
+    _serve(monkeypatch, _identity(), [AVERY, ACME], [PYPI_DEFAULT])
+
+    as_json = runner.invoke(app, ["--json", "art", "status"])
+
+    values = json.loads(as_json.output)["values"]
+    # A single pypi selection keeps the single-target fields.
+    assert (values["target"], values["format"]) == ("repo:team/libs", "pypi")
+    assert values["formats"]["npm"] == {"target": None, "type": None, "source": "none"}
+    cfg_mod.update_selected_artifact_targets(
+        select={
+            "npm": cfg_mod.ArtifactTarget(
+                target_type="official_cache",
+                account_ref="personal-user",
+                stable_selector="mirror:rc_34567890",
+                display_selector="mirror:npmjs",
+                format="npm",
+            )
+        },
+        profile="work",
+        account_ref="personal-user",
+    )
+
+    values = json.loads(runner.invoke(app, ["--json", "art", "status"]).output)["values"]
+
+    assert (values["target"], values["type"], values["format"]) == (None, None, None)
+    assert values["formats"]["npm"]["target"] == "mirror:npmjs"
+
+
+def test_status_shows_an_unknown_default_mirror_when_the_lookup_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from rvs.client import ApiError
+
+    _isolate_config(monkeypatch, tmp_path)
+    _serve(monkeypatch, _identity(), [AVERY])
+    import rvs.api as api_mod
+
+    def unavailable(*args, **kwargs):
+        raise ApiError(503, "unavailable")
+
+    monkeypatch.setattr(api_mod, "collection_all", unavailable)
+
+    result = runner.invoke(app, ["--json", "art", "status"])
+
+    formats = json.loads(result.output)["values"]["formats"]
+    assert formats["pypi"] == {
+        "target": None,
+        "type": "official_cache",
+        "source": "default_mirror",
+    }
+    assert formats["oci"]["source"] == "none"
+    human = runner.invoke(app, ["art", "status"])
+    assert "default mirror (default mirror, automatic)" in _row(human.output, "maven target")
+
+
+def test_status_has_no_default_mirror_for_automation(monkeypatch, tmp_path: Path) -> None:
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("RVS_TOKEN", "rvs_ust_" + "A" * 43)
+    calls = _serve(monkeypatch, _identity(), [AVERY], [PYPI_DEFAULT])
+
+    result = runner.invoke(app, ["--json", "art", "status"])
+
+    assert result.exit_code == 0, result.output
+    formats = json.loads(result.output)["values"]["formats"]
+    assert {row["source"] for row in formats.values()} == {"none"}
+    assert "/v0/artifacts/remote-caches" not in calls
 
 
 def test_profile_use_reports_persistence_scope(monkeypatch, tmp_path: Path) -> None:

@@ -1509,7 +1509,7 @@ def test_package_commands_need_a_selection_or_target(monkeypatch, tmp_path: Path
 
 
 _SELECTED_MIRROR_CONFIG = _SELECTED_REPOSITORY_CONFIG.replace(
-    'target_type = "repository"', 'target_type = "official_cache"'
+    'target_type = "repository"', 'target_type = "official_cache"\nformat = "pypi"'
 ).replace('display_selector = "test-account/repo"', 'display_selector = "mirror:pypiorg"')
 
 

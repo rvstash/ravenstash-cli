@@ -17,7 +17,12 @@ import typer
 from .. import config as cfg_mod
 from .. import output
 from ..account.commands import acting_account_ref, resolve_account
-from ..artifacts.targets import PackageFormat, registry_context
+from ..artifacts.targets import (
+    PackageFormat,
+    default_mirror_applies,
+    interactive_session,
+    registry_context,
+)
 from ..publishing import PublishItem, confirm_change, confirm_context
 from ..subprocesses import child_environment
 from ..tool_advisories import warn_if_old
@@ -87,18 +92,24 @@ def _build_plan(
     if not adapter.needs_target(native_args):
         return ExecutionPlan(cmd=cmd, env=env, native_command=())
     account_ref = _selected_account_ref(options)
-    saved = cfg_mod.selected_artifact_target(options.profile, account_ref)
-    if not options.target and saved is None:
+    operations = adapter.operations(argv)
+    saved = cfg_mod.selected_artifact_target(options.profile, account_ref, adapter.kind)
+    if (
+        not options.target
+        and saved is None
+        and not _may_use_default_mirror(options, account_ref, adapter.kind, operations)
+    ):
         output.fatal(
-            "No Ravenstash target is selected. Run `rvs art select` or pass --rvs-target. "
-            "Use the native tool directly for its default registries."
+            f"No Ravenstash target is selected for {adapter.kind}. Run `rvs art select` or pass "
+            "--rvs-target. Use the native tool directly for its default registries."
         )
     adapter.preflight(argv, command_prefix)
-    # Never infer a target from native defaults or run an unconfigured client.
+    # Never infer a target from native defaults or run an unconfigured client. A
+    # personal account's interactive read may use its default Ravenstash mirror.
     route = _resolve_route(
         adapter.kind,
         options,
-        adapter.operations(argv),
+        operations,
         artifacts=adapter.publish_items(argv) if adapter.is_publishing(argv) else None,
         confirmation=adapter.confirmation(argv, env),
     )
@@ -142,6 +153,23 @@ def _resolve_route(
         native_path=context.native_path,
         package_token=context.token,
     )
+
+
+def _may_use_default_mirror(
+    options: NativeOptions,
+    account_ref: str | None,
+    kind: PackageFormat,
+    operations: tuple[PackageOperation, ...],
+) -> bool:
+    """Return whether an unselected read may fall back to the default mirror.
+
+    The account is resolved when the route is, so an account not cached yet is
+    given the benefit of the doubt here and checked there.
+    """
+    if not interactive_session() or set(operations) - {"read"}:
+        return False
+    account = cfg_mod.cached_account(options.profile, account_ref) if account_ref else None
+    return account is None or default_mirror_applies(account, kind, operations)
 
 
 def _selected_account_ref(options: NativeOptions) -> str | None:

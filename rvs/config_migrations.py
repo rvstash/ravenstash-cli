@@ -14,13 +14,49 @@ from collections.abc import Callable
 
 
 SCHEMA_VERSION_KEY = "schema_version"
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 Migration = Callable[[dict], dict]
 
+_FORMATS = ("pypi", "npm", "maven", "oci")
+
+
+def _per_format_selections(raw: dict) -> dict:
+    """Schema 1 -> 2: one selected target per account becomes one per format.
+
+    A selection that names its format keeps exactly that format. A repository
+    selection without a format (a repository with several formats) applied to
+    every wrapper in schema 1, whatever format the wrapper used, so it is kept
+    for all four formats; selecting the repository again records only the
+    formats it actually has. A selection that cannot be placed is dropped.
+    """
+    profiles = raw.get("profiles")
+    if not isinstance(profiles, dict):
+        return raw
+    for profile in profiles.values():
+        accounts = profile.get("accounts") if isinstance(profile, dict) else None
+        if not isinstance(accounts, dict):
+            continue
+        for account in accounts.values():
+            if not isinstance(account, dict) or "selected_target" not in account:
+                continue
+            selected = account.pop("selected_target")
+            if not isinstance(selected, dict):
+                continue
+            stored_format = selected.get("format")
+            if stored_format in _FORMATS:
+                kinds: tuple[str, ...] = (stored_format,)
+            elif stored_format is None and selected.get("target_type") == "repository":
+                kinds = _FORMATS
+            else:
+                continue
+            account["selected_targets"] = {kind: selected | {"format": kind} for kind in kinds}
+    return raw
+
+
 # Maps a schema version to the pure transform that upgrades a parsed config of
 # that version to the next one. Schema 1 is the first, so nothing migrates to it.
-MIGRATIONS: dict[int, Migration] = {}
+MIGRATIONS: dict[int, Migration] = {1: _per_format_selections}
 
 
 def migrate(raw: dict, *, from_version: int, to_version: int) -> dict:

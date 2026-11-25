@@ -1,7 +1,8 @@
 """`rvs art` command group."""
 
 import json
-from typing import cast
+from dataclasses import replace
+from typing import TYPE_CHECKING, cast
 
 import click
 import typer
@@ -27,6 +28,9 @@ from ..client import ApiClient, ApiError
 from ..publishing import confirm_question
 from ..status import (
     account_json,
+    format_rows,
+    format_selections,
+    formats_json,
     inspect_selection,
     selection_account_display,
     target_json,
@@ -46,9 +50,13 @@ from .targets import (
     repository_formats,
     repository_target_name,
     resolve_repository_entry,
-    resolve_target,
+    resolve_target_formats,
 )
 from .trash import moved_to_trash
+
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 app = typer.Typer(
@@ -132,6 +140,23 @@ def _context_account_ref(profile: str | None, account: str | None) -> str | None
     return str(resolve_account(account, profile)["ref"])
 
 
+_SELECT_FORMAT_HELP = (
+    "Format to select the target for: pypi | npm | maven | oci. Repeat or separate "
+    "with commas. Default: every format the target has."
+)
+
+
+def _requested_formats(kinds: list[str] | None) -> list[cfg_mod.Format]:
+    try:
+        return cast("list[cfg_mod.Format]", flatten_formats(kinds or []))
+    except ValueError as exc:
+        output.fatal(str(exc))
+
+
+def _format_list(kinds: Sequence[str]) -> str:
+    return ", ".join(kinds)
+
+
 @app.command("select")
 def target_select(
     target: str = typer.Argument(
@@ -141,30 +166,43 @@ def target_select(
             "mirror:<source>, or custom-mirror:<name>."
         ),
     ),
-    kind: str | None = typer.Option(None, "--format", help="Format if needed."),
+    kinds: list[str] | None = typer.Option(None, "--format", help=_SELECT_FORMAT_HELP),
     account: str | None = typer.Option(None, "--account", help=_ACCOUNT_HELP),
     profile: str | None = typer.Option(None, "--profile", "-p"),
 ) -> None:
-    """Choose the repository or mirror used when --target is omitted."""
+    """Choose the repository or mirror used for its formats when --target is omitted.
+
+    Without --format the target is selected for every format it has; formats it
+    lacks keep their current selection.
+    """
+    requested = _requested_formats(kinds)
     account_ref = _context_account_ref(profile, account)
     profile_name, selected_account = ensure_active_account(profile, account_ref)
-    _, _, selected = resolve_target(
+    _, _, selected, formats = resolve_target_formats(
         target,
         profile=profile_name,
         account_ref=selected_account.account_ref,
-        kind=kind,
+        kind=requested[0] if len(requested) == 1 else None,
     )
+    missing = [item for item in requested if item not in formats]
+    if missing:
+        output.fatal(
+            f"'{selected.display_selector}' has no {_format_list(missing)} format. "
+            f"It has: {_format_list(formats) or 'none'}."
+        )
+    chosen = requested or list(formats)
+    if not chosen:
+        output.fatal(f"'{selected.display_selector}' has no enabled format to select.")
     try:
-        cfg_mod.set_selected_artifact_target(
-            selected,
+        cfg_mod.update_selected_artifact_targets(
+            select={kind: replace(selected, format=kind) for kind in chosen},
             profile=profile_name,
             account_ref=selected_account.account_ref,
         )
     except ValueError as exc:
         output.fatal(str(exc))
-    kind_suffix = f" ({selected.format})" if selected.format else ""
     output.success(
-        f"Selected '{selected.display_selector}'{kind_suffix} for "
+        f"Selected '{selected.display_selector}' for {_format_list(chosen)} in "
         f"{account_display_name(selected_account)}."
     )
 
@@ -174,9 +212,9 @@ def target_status(
     account: str | None = typer.Option(None, "--account", help=_ACCOUNT_HELP),
     profile: str | None = typer.Option(None, "--profile", "-p"),
 ) -> None:
-    """Show the account, repository or mirror, and format that commands use."""
+    """Show the account and the repository or mirror each format uses."""
     selection = inspect_selection(profile, account)
-    selected = selection.target
+    rows = format_selections(selection)
     account_name = selection_account_display(selection)
     output.kv(
         {
@@ -185,35 +223,44 @@ def target_status(
                 if account_name
                 else "not selected"
             ),
-            "Target": selected.display_selector if selected else "not selected",
-            "Format": selected.format if selected else None,
+            **format_rows(rows),
         },
         title="Artifacts status",
         json_values={
             "account": account_json(selection),
-            **(target_json(selected) or {"target": None, "type": None, "format": None}),
+            **(target_json(selection.target) or {"target": None, "type": None, "format": None}),
+            "formats": formats_json(rows),
         },
     )
 
 
 @app.command("clear")
 def target_clear(
+    kinds: list[str] | None = typer.Option(
+        None,
+        "--format",
+        help="Format to clear: pypi | npm | maven | oci. Repeat or separate with commas. "
+        "Default: every format.",
+    ),
     account: str | None = typer.Option(None, "--account", help=_ACCOUNT_HELP),
     profile: str | None = typer.Option(None, "--profile", "-p"),
 ) -> None:
     """Clear the selected repository or mirror without signing out."""
+    requested = _requested_formats(kinds)
     account_ref = _context_account_ref(profile, account)
     profile_name, selected_account = ensure_active_account(profile, account_ref)
+    cleared = tuple(requested) or cfg_mod.FORMAT_VALUES
     try:
-        cfg_mod.set_selected_artifact_target(
-            None,
+        cfg_mod.update_selected_artifact_targets(
+            clear=cleared,
             profile=profile_name,
             account_ref=selected_account.account_ref,
         )
     except ValueError as exc:
         output.fatal(str(exc))
+    scope = f" for {_format_list(requested)}" if requested else ""
     output.success(
-        f"Cleared the repository or mirror for {account_display_name(selected_account)}."
+        f"Cleared the repository or mirror{scope} in {account_display_name(selected_account)}."
     )
 
 
@@ -343,16 +390,10 @@ def _package_lane(
     if repo is None:
         profile_name, _ = _profile(profile or _root_package_options().get("profile"))
         account_ref = _account_ref(profile_name)
-        saved = cfg_mod.selected_artifact_target(profile_name, account_ref)
-        if saved is None:
-            output.fatal("No repository is selected. Pass --target or run `rvs art select`.")
-        if saved.target_type != "repository":
-            output.fatal(
-                f"'{saved.display_selector}' is a private mirror; package commands need "
-                "a private repository. Pass --target."
-            )
+        saved, saved_kind = _selected_package_repository(
+            cfg_mod.selected_artifact_targets(profile_name, account_ref), kind or only
+        )
         repo = saved.stable_selector
-        saved_kind = saved.format
     # Only an explicit --format filters the lookup, so a repository without the
     # format a command implies is reported as such rather than as not found.
     repository = _resolve_repository_entry(repo, profile, kind=kind, account_ref=account_ref)
@@ -376,6 +417,45 @@ def _package_lane(
             f"'{display}' has several package formats; pass --format {' | '.join(formats)}."
         )
     return repository["ref"], cast("cfg_mod.Format", formats[0]), display
+
+
+def _selected_package_repository(
+    selections: dict[cfg_mod.Format, cfg_mod.ArtifactTarget], wanted: str | None
+) -> tuple[cfg_mod.ArtifactTarget, str | None]:
+    """Return the repository selected for package commands and its one selected format.
+
+    With a known format, that format's selection is used. Otherwise the package
+    formats selected with a repository must all use one repository; its format is
+    returned only when it is selected for exactly one package format.
+    """
+    if wanted is not None:
+        saved = selections.get(cast("cfg_mod.Format", wanted))
+        if saved is None:
+            output.fatal(
+                f"No {wanted} repository is selected. Pass --target or run `rvs art select`."
+            )
+        present = {cast("cfg_mod.Format", wanted): saved}
+    else:
+        package = {kind: target for kind, target in selections.items() if kind in _PACKAGE_KINDS}
+        present = {
+            kind: target for kind, target in package.items() if target.target_type == "repository"
+        }
+        if not present and package:
+            present = package
+        if not present:
+            output.fatal("No repository is selected. Pass --target or run `rvs art select`.")
+    first = next(iter(present.values()))
+    if first.target_type != "repository":
+        output.fatal(
+            f"'{first.display_selector}' is a private mirror; package commands need "
+            "a private repository. Pass --target."
+        )
+    if len({target.stable_selector for target in present.values()}) > 1:
+        output.fatal(
+            "Different repositories are selected for "
+            f"{_format_list(sorted(present))}; pass --format or --target."
+        )
+    return first, (next(iter(present)) if len(present) == 1 else None)
 
 
 def _format_path(repository_ref: str, package_format: str, suffix: str) -> str:
@@ -691,9 +771,11 @@ def remote_select(
     account: str | None = typer.Option(None, "--account", help=_ACCOUNT_HELP),
     profile: str | None = typer.Option(None, "--profile", "-p"),
 ) -> None:
-    """Select a Ravenstash-provided or custom private mirror."""
+    """Select a Ravenstash-provided or custom private mirror for its format."""
     prefix = "custom-mirror" if custom else "mirror"
-    target_select(f"{prefix}:{mirror}", kind=kind, account=account, profile=profile)
+    target_select(
+        f"{prefix}:{mirror}", kinds=[kind] if kind else None, account=account, profile=profile
+    )
 
 
 @remote_app.command("list")
@@ -754,6 +836,36 @@ def remote_list(
     )
 
 
+def _default_official_source(sources: list[dict], kind: str) -> dict | None:
+    """Return the official source Ravenstash marks as the default for *kind*."""
+    candidates = [item for item in sources if item.get("format") == kind]
+    marked = [item for item in candidates if item.get("is_default") is True]
+    if marked:
+        return marked[0]
+    if any("is_default" in item for item in candidates):
+        return None
+    # A server that predates the marker uses the well-known default names.
+    fallback = DEFAULT_OFFICIAL_SOURCES.get(cast("PackageFormat", kind))
+    return next((item for item in candidates if item.get("ref") == fallback), None)
+
+
+def _existing_official_cache(client: ApiClient, account_ref: str, source: dict) -> dict | None:
+    remotes = collection_all(
+        client,
+        artifacts_path("remote-caches"),
+        {"account_ref": account_ref, "format": source["format"]},
+    )
+    return next(
+        (
+            item
+            for item in remotes
+            if item.get("source_type") == "official"
+            and item.get("official_source_ref") == source["ref"]
+        ),
+        None,
+    )
+
+
 @remote_app.command("create")
 def remote_create(
     source: str | None = typer.Argument(None, help="Official source slug; defaults by format."),
@@ -764,24 +876,30 @@ def remote_create(
     profile: str | None = typer.Option(None, "--profile", "-p"),
     account: str | None = typer.Option(None, "--account"),
 ) -> None:
-    """Create a Ravenstash-provided private mirror."""
-    if source is None:
-        if kind not in DEFAULT_OFFICIAL_SOURCES:
-            output.fatal("Pass a SOURCE or --format pypi, npm, or maven.")
-        source = DEFAULT_OFFICIAL_SOURCES[cast("PackageFormat", kind)]
+    """Create a Ravenstash-provided private mirror; an existing one is reused."""
+    if source is None and kind not in DEFAULT_OFFICIAL_SOURCES:
+        output.fatal("Pass a SOURCE or --format pypi, npm, or maven.")
     account_ref = _context_account_ref(profile, account) or _account_ref(profile)
     if kind:
         _require_package_kind(kind)
     client = _client(profile)
+    existed = False
     try:
         sources = collection_all(
             client, artifacts_path("official-sources"), {"account_ref": account_ref}
         )
-        matches = [
-            item
-            for item in sources
-            if source == item["ref"] and (kind is None or item["format"] == kind)
-        ]
+        if source is None:
+            default = _default_official_source(sources, cast("str", kind))
+            if default is None:
+                output.fatal(f"Ravenstash has no default {kind} mirror source.")
+            matches = [default]
+            source = str(default["ref"])
+        else:
+            matches = [
+                item
+                for item in sources
+                if source == item["ref"] and (kind is None or item["format"] == kind)
+            ]
         if not matches:
             output.fatal(f"Official mirror source '{source}' was not found.")
         if len(matches) > 1:
@@ -794,15 +912,30 @@ def remote_create(
             payload["min_age_hours"] = min_age_hours
         if max_age_hours is not None:
             payload["max_age_hours"] = max_age_hours
-        item = client.post(artifacts_path("remote-caches"), json=payload).json()
+        try:
+            response = client.post(artifacts_path("remote-caches"), json=payload)
+            item = response.json()
+            # Ravenstash answers 200 with the account's existing mirror.
+            existed = getattr(response, "status_code", 201) == 200
+        except ApiError as exc:
+            # Older servers refuse a second mirror of the same source.
+            if exc.status_code != 409:
+                raise
+            found = _existing_official_cache(client, account_ref, matches[0])
+            if found is None:
+                raise
+            item, existed = found, True
     except (ApiError, KeyError, TypeError, ValueError) as exc:
         output.fatal(str(exc))
     target_name = remote_target_name(item)
-    output.success(f"Added private mirror '{target_name}'.")
+    if existed:
+        output.success(f"Private mirror '{target_name}' already exists.")
+    else:
+        output.success(f"Added private mirror '{target_name}'.")
     if select:
         target_select(
             target_name,
-            kind=str(item["format"]),
+            kinds=[str(item["format"])],
             account=account,
             profile=profile,
         )

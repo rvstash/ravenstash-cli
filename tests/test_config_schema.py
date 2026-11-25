@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 import tomli_w
@@ -23,6 +24,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "config"
 # from it, so it is never edited; a new schema adds a new fixture instead.
 SCHEMA_1 = FIXTURES / "schema-1.toml"
 SCHEMA_1_SHA256 = "905d00f11ce2ce17830f54b3aabc07acfcabfb2cbcf4bdbb3d700b3f65ac2fc7"
+# Schema 2 stores one selected target per format; this is SCHEMA_1 migrated.
+SCHEMA_2 = FIXTURES / "schema-2.toml"
+SCHEMA_2_SHA256 = "6bf5c874fbc506ae634d7108bda01bb7094cd98d2a53cf9735bfaf00170570f8"
 PRE_RELEASE_6 = FIXTURES / "pre-release.toml"
 
 CURRENT = config_migrations.CURRENT_SCHEMA_VERSION
@@ -86,7 +90,7 @@ def _rename_profile(raw: dict, old: str, new: str) -> dict:
 
 @pytest.fixture
 def synthetic_chain(monkeypatch) -> list[tuple[int, int]]:
-    """Simulate schemas 2 and 3; the shipped registry holds no migration yet.
+    """Replace the shipped registry with a synthetic two-step chain from schema 1.
 
     Each step records its registry key and the schema version it was handed.
     The second step only succeeds on the result of the first.
@@ -109,10 +113,13 @@ def synthetic_chain(monkeypatch) -> list[tuple[int, int]]:
 # ── The first public schema ───────────────────────────────────────────────────
 
 
-def test_schema_1_fixture_is_never_edited() -> None:
-    content = SCHEMA_1.read_bytes().replace(b"\r\n", b"\n")
+@pytest.mark.parametrize(
+    ("fixture", "digest"), [(SCHEMA_1, SCHEMA_1_SHA256), (SCHEMA_2, SCHEMA_2_SHA256)]
+)
+def test_schema_fixtures_are_never_edited(fixture: Path, digest: str) -> None:
+    content = fixture.read_bytes().replace(b"\r\n", b"\n")
 
-    assert hashlib.sha256(content).hexdigest() == SCHEMA_1_SHA256
+    assert hashlib.sha256(content).hexdigest() == digest
 
 
 def test_registry_holds_one_migration_for_every_earlier_schema() -> None:
@@ -122,11 +129,11 @@ def test_registry_holds_one_migration_for_every_earlier_schema() -> None:
     )
 
 
-def test_reader_accepts_the_schema_1_fixture_without_touching_it(
+def test_reader_accepts_the_current_schema_fixture_without_touching_it(
     monkeypatch, tmp_path: Path
 ) -> None:
     config_dir, config_file = _point_config(monkeypatch, tmp_path)
-    _install(config_file, SCHEMA_1)
+    _install(config_file, SCHEMA_2)
     before = _snapshot(config_dir)
 
     cfg = cfg_mod.load()
@@ -151,29 +158,108 @@ def test_reader_accepts_the_schema_1_fixture_without_touching_it(
     personal = work.accounts["ac_fake2222"]
     assert personal.account_type == "personal"
     assert personal.account_handle == "example-user"
-    assert personal.selected_target is not None
-    assert personal.selected_target.target_type == "official_cache"
-    assert personal.selected_target.stable_selector == "mirror:rc_fake6666"
-    assert personal.selected_target.format == "pypi"
+    assert list(personal.selected_targets) == ["pypi"]
+    mirror = personal.selected_targets["pypi"]
+    assert mirror.target_type == "official_cache"
+    assert mirror.stable_selector == "mirror:rc_fake6666"
+    assert mirror.format == "pypi"
     organization = work.accounts["ac_fake3333"]
     assert organization.organization_role == "admin"
     assert organization.authority_revision == 7
-    assert organization.selected_target is not None
-    assert organization.selected_target.display_selector == "repo:example-space/example-repo"
-    assert organization.selected_target.namespace_ref == "in_fake4444"
-    assert organization.selected_target.repository_ref == "ar_fake5555"
+    assert list(organization.selected_targets) == ["npm"]
+    repository = organization.selected_targets["npm"]
+    assert repository.display_selector == "repo:example-space/example-repo"
+    assert repository.namespace_ref == "in_fake4444"
+    assert repository.repository_ref == "ar_fake5555"
     assert _snapshot(config_dir) == before
 
 
-def test_writer_reproduces_the_schema_1_fixture(monkeypatch, tmp_path: Path) -> None:
+def test_writer_reproduces_the_current_schema_fixture(monkeypatch, tmp_path: Path) -> None:
     _config_dir, config_file = _point_config(monkeypatch, tmp_path)
-    _install(config_file, SCHEMA_1)
+    _install(config_file, SCHEMA_2)
 
     cfg_mod.save(cfg_mod.load())
 
     written = config_file.read_text(encoding="utf-8")
-    assert written.startswith("schema_version = 1\n")
-    assert tomllib.loads(written) == tomllib.loads(SCHEMA_1.read_text(encoding="utf-8"))
+    assert written.startswith(f"schema_version = {CURRENT}\n")
+    assert written == SCHEMA_2.read_text(encoding="utf-8")
+
+
+# ── Schema 1 -> 2: per-format selections ──────────────────────────────────────
+
+
+def test_schema_1_migrates_to_the_current_schema_fixture(monkeypatch, tmp_path: Path) -> None:
+    config_dir, config_file = _point_config(monkeypatch, tmp_path)
+    original = _install(config_file, SCHEMA_1)
+
+    cfg_mod.load()
+
+    assert _stored(config_file) == tomllib.loads(SCHEMA_2.read_text(encoding="utf-8"))
+    assert (config_dir / BACKUP_1).read_bytes() == original
+
+
+def _schema_1_with_selection(selection: dict | None) -> dict:
+    raw = tomllib.loads(SCHEMA_1.read_text(encoding="utf-8"))
+    account = raw["profiles"]["work"]["accounts"]["ac_fake3333"]
+    if selection is None:
+        del account["selected_target"]
+    else:
+        account["selected_target"] = selection
+    return raw
+
+
+def test_repository_selection_without_format_is_kept_for_every_format() -> None:
+    raw = _schema_1_with_selection(None)
+    repository = tomllib.loads(SCHEMA_1.read_text(encoding="utf-8"))["profiles"]["work"][
+        "accounts"
+    ]["ac_fake3333"]["selected_target"]
+    del repository["format"]
+    raw["profiles"]["work"]["accounts"]["ac_fake3333"]["selected_target"] = repository
+
+    migrated = config_migrations.migrate(raw, from_version=1, to_version=2)
+
+    selections = migrated["profiles"]["work"]["accounts"]["ac_fake3333"]["selected_targets"]
+    assert list(selections) == ["pypi", "npm", "maven", "oci"]
+    for kind, selected in selections.items():
+        assert selected == repository | {"format": kind}
+    assert "selected_target" not in migrated["profiles"]["work"]["accounts"]["ac_fake3333"]
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        "not a table",
+        {"target_type": "official_cache", "stable_selector": "mirror:rc_fake6666"},
+        {"target_type": "repository", "format": "rubygems"},
+    ],
+    ids=["not a table", "mirror without format", "unknown format"],
+)
+def test_selection_that_cannot_be_placed_is_dropped(selection: object) -> None:
+    raw = _schema_1_with_selection(cast("dict", selection))
+
+    migrated = config_migrations.migrate(raw, from_version=1, to_version=2)
+
+    account = migrated["profiles"]["work"]["accounts"]["ac_fake3333"]
+    assert "selected_target" not in account
+    assert "selected_targets" not in account
+
+
+def test_account_without_selection_and_odd_tables_migrate_unchanged() -> None:
+    raw = {
+        "schema_version": 1,
+        "profiles": {
+            "plain": {"accounts": {"ac_fake2222": {"account_type": "personal"}}},
+            "no accounts": {"accounts": "not a table"},
+            "not a profile": "value",
+        },
+    }
+
+    migrated = config_migrations.migrate(raw, from_version=1, to_version=2)
+
+    assert migrated == raw | {"schema_version": 2}
+    assert config_migrations.migrate(
+        {"schema_version": 1, "profiles": "not a table"}, from_version=1, to_version=2
+    ) == {"schema_version": 2, "profiles": "not a table"}
 
 
 def test_first_save_writes_the_schema_marker(monkeypatch, tmp_path: Path) -> None:
@@ -227,8 +313,8 @@ _WRITE_PATHS = {
     "cache_account": lambda: cfg_mod.cache_account(
         profile="default", account={"ref": "ac_fake2222", "type": "personal"}
     ),
-    "set_selected_artifact_target": lambda: cfg_mod.set_selected_artifact_target(
-        None, profile="default", account_ref="ac_fake2222"
+    "update_selected_artifact_targets": lambda: cfg_mod.update_selected_artifact_targets(
+        clear=("pypi",), profile="default", account_ref="ac_fake2222"
     ),
     "delete_profile": lambda: cfg_mod.delete_profile("default"),
 }

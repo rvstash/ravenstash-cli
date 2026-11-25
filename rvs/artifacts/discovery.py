@@ -101,6 +101,30 @@ class Discovery:
         return qualify_reference(f"{self.endpoint(kind)}/{root}", operand)
 
 
+def selected_target_for(
+    profile_name: str, account_ref: str, kind: str | None
+) -> cfg.ArtifactTarget:
+    """Return the selected target for *kind*, or the one target selected for every format.
+
+    Discovery prints addresses and templates meant to be kept, so it never falls
+    back to a default mirror: the target is always one the user chose.
+    """
+    selections = cfg.selected_artifact_targets(profile_name, account_ref)
+    if kind is not None:
+        saved = selections.get(cast("cfg.Format", kind))
+        if saved is None:
+            raise ValueError(f"No {kind} target is selected. Pass --target or run rvs art select.")
+        return saved
+    distinct = {item.stable_selector: item for item in selections.values()}
+    if not distinct:
+        raise ValueError("No target is selected. Pass --target or run rvs art select.")
+    if len(distinct) > 1:
+        raise ValueError(
+            "Different targets are selected for different formats; pass --format or --target."
+        )
+    return next(iter(distinct.values()))
+
+
 def discover(
     target: str | None, profile: str | None, account: str | None, kind: str | None = None
 ) -> Discovery:
@@ -113,10 +137,7 @@ def discover(
     if not account_ref:
         raise ValueError("No account is selected. Run rvs account switch.")
     if target is None:
-        saved = cfg.selected_artifact_target(profile_name, account_ref)
-        if saved is None:
-            raise ValueError("No target is selected. Pass --target or run rvs art select.")
-        target = saved.stable_selector
+        target = selected_target_for(profile_name, account_ref, kind).stable_selector
     spec = parse_target(target)
     client = ApiClient.from_profile(profile_name)
     if spec.target_type == "repository":

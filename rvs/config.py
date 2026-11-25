@@ -10,7 +10,7 @@ Config file shape
 -----------------
 ::
 
-    schema_version = 1
+    schema_version = 2
     default_profile = "default"
 
     [profiles.default]
@@ -39,6 +39,19 @@ Config file shape
 
     [profiles.default.native_registries.oci]
     registry_base_url = "https://oci.rvsta.sh"
+
+    [profiles.default.accounts.ac_23456789]
+    account_type = "personal"
+
+    # ``rvs art select`` stores one repository or mirror per format.
+    [profiles.default.accounts.ac_23456789.selected_targets.pypi]
+    target_type = "official_cache"
+    account_ref = "ac_23456789"
+    stable_selector = "mirror:rc_23456789"
+    display_selector = "mirror:pypiorg"
+    format = "pypi"
+    remote_cache_ref = "rc_23456789"
+    remote_name_cache = "pypiorg"
 
 
 Endpoint overrides from the process environment, ``~/.rvs/profiles.env``, or
@@ -74,6 +87,7 @@ from .paths import rvs_home
 
 
 Format = Literal["pypi", "npm", "maven", "oci"]
+FORMAT_VALUES: tuple[Format, ...] = ("pypi", "npm", "maven", "oci")
 ArtifactTargetType = Literal["repository", "official_cache", "custom_cache"]
 NamespaceRealm = Literal["internal", "global"]
 
@@ -281,7 +295,8 @@ class AccountContext:
     account_type: str
     organization_role: str | None = None
     authority_revision: int | None = None
-    selected_target: ArtifactTarget | None = None
+    # The repository or mirror chosen with ``rvs art select``, one per format.
+    selected_targets: dict[Format, ArtifactTarget] = field(default_factory=dict)
     account_handle: str | None = None
 
 
@@ -773,6 +788,17 @@ def _artifact_target_from_mapping(value: object) -> ArtifactTarget | None:
     )
 
 
+def _selected_targets_from_mapping(value: object) -> dict[Format, ArtifactTarget]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[Format, ArtifactTarget] = {}
+    for kind in FORMAT_VALUES:
+        target = _artifact_target_from_mapping(value.get(kind))
+        if target is not None and target.format == kind:
+            result[kind] = target
+    return result
+
+
 def _account_contexts_from_mapping(value: object) -> dict[str, AccountContext]:
     if not isinstance(value, dict):
         return {}
@@ -790,7 +816,7 @@ def _account_contexts_from_mapping(value: object) -> dict[str, AccountContext]:
             account_type=account_type,
             organization_role=raw.get("organization_role"),
             authority_revision=raw.get("authority_revision"),
-            selected_target=_artifact_target_from_mapping(raw.get("selected_target")),
+            selected_targets=_selected_targets_from_mapping(raw.get("selected_targets")),
             account_handle=raw.get("account_handle"),
         )
     return result
@@ -808,10 +834,13 @@ def _account_context_mapping(account: AccountContext) -> dict:
             "account_handle": account.account_handle,
             "organization_role": account.organization_role,
             "authority_revision": account.authority_revision,
-            "selected_target": (
-                _artifact_target_mapping(account.selected_target)
-                if account.selected_target is not None
-                else None
+            "selected_targets": (
+                {
+                    kind: _artifact_target_mapping(account.selected_targets[kind])
+                    for kind in FORMAT_VALUES
+                    if kind in account.selected_targets
+                }
+                or None
             ),
         }.items()
         if value is not None
@@ -901,14 +930,23 @@ def _validate_raw_config(raw: dict) -> None:
             account_path = f"{profile_path}.accounts.{account_ref}"
             if not isinstance(account_ref, str) or not account_ref or not isinstance(account, dict):
                 raise ValueError(f"invalid account table at {account_path}")
-            selected = account.get("selected_target")
-            if selected is None:
+            selections = account.get("selected_targets")
+            if selections is None:
                 continue
-            target_path = f"{account_path}.selected_target"
-            if not isinstance(selected, dict) or _artifact_target_from_mapping(selected) is None:
-                raise ValueError(f"invalid selected target at {target_path}")
-            if selected.get("target_type") == "repository":
-                _validate_repository_target_identity(selected, path=target_path)
+            if not isinstance(selections, dict):
+                raise ValueError(f"selected targets must be a table at {account_path}")
+            for kind, selected in selections.items():
+                target_path = f"{account_path}.selected_targets.{kind}"
+                if kind not in FORMAT_VALUES:
+                    raise ValueError(f"unknown format at {target_path}")
+                if (
+                    not isinstance(selected, dict)
+                    or _artifact_target_from_mapping(selected) is None
+                    or selected.get("format") != kind
+                ):
+                    raise ValueError(f"invalid selected target at {target_path}")
+                if selected.get("target_type") == "repository":
+                    _validate_repository_target_identity(selected, path=target_path)
 
 
 def _write_private_file(path: Path, data: bytes) -> None:
@@ -1215,7 +1253,7 @@ def cache_account(
         authority_revision=account["authority_revision"]
         if "authority_revision" in account
         else (existing.authority_revision if existing is not None else None),
-        selected_target=existing.selected_target if existing is not None else None,
+        selected_targets=dict(existing.selected_targets) if existing is not None else {},
     )
     profile_config.accounts[account_ref] = context
     session_scoped = _session_file() is not None
@@ -1244,20 +1282,32 @@ def cached_account(
     return profile_config.accounts.get(effective_account_ref) if profile_config else None
 
 
-def selected_artifact_target(
+def selected_artifact_targets(
     profile: str | None = None,
     account_ref: str | None = None,
-) -> ArtifactTarget | None:
+) -> dict[Format, ArtifactTarget]:
+    """Return the account's selected repository or mirror for each format."""
     account = cached_account(profile, account_ref)
-    return account.selected_target if account is not None else None
+    return dict(account.selected_targets) if account is not None else {}
 
 
-def set_selected_artifact_target(
-    target: ArtifactTarget | None,
+def selected_artifact_target(
+    profile: str | None,
+    account_ref: str | None,
+    kind: Format,
+) -> ArtifactTarget | None:
+    """Return the repository or mirror selected for one format, if any."""
+    return selected_artifact_targets(profile, account_ref).get(kind)
+
+
+def update_selected_artifact_targets(
     *,
+    select: dict[Format, ArtifactTarget] | None = None,
+    clear: tuple[Format, ...] = (),
     profile: str | None = None,
     account_ref: str | None = None,
 ) -> None:
+    """Select targets for some formats and clear others; other formats are kept."""
     cfg = load()
     profile_name = profile or current_profile_name(cfg)
     effective_account_ref = account_ref or current_account_ref(profile_name, cfg)
@@ -1267,7 +1317,12 @@ def set_selected_artifact_target(
     account = profile_config.accounts.get(effective_account_ref)
     if account is None:
         raise ValueError("The selected account could not be found")
-    account.selected_target = target
+    for kind in clear:
+        account.selected_targets.pop(kind, None)
+    for kind, target in (select or {}).items():
+        if target.format != kind:
+            raise ValueError(f"A {target.format} target cannot be selected for {kind}")
+        account.selected_targets[kind] = target
     profile_config.accounts[effective_account_ref] = account
     cfg.profiles[profile_name] = profile_config
     save(cfg)

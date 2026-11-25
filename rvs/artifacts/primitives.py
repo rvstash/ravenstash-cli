@@ -66,7 +66,8 @@ def reference(
     """Print one canonical repository-qualified OCI reference."""
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            found = discover(target, profile, account, kind)
+            # References are OCI-only, so an omitted target means the OCI selection.
+            found = discover(target, profile, account, kind or (None if target else "oci"))
             selected = found.select_format(kind, ("oci",))
             value = found.reference(selected, operand)
         result = {"target": found.target.display_selector, "format": selected, "reference": value}

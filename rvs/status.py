@@ -1,7 +1,9 @@
 """Read-only summary of the signed-in user and the current CLI selections."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Literal
 
+import httpx2 as httpx
 import typer
 
 from . import config as cfg_mod
@@ -34,7 +36,30 @@ class Selection:
     account: dict | None
     account_ref: str | None
     account_source: str
+    # One selection per format; ``target`` is the single target selected for
+    # every selected format, kept for the pre-format-selection output shape.
+    targets: dict[cfg_mod.Format, cfg_mod.ArtifactTarget]
     target: cfg_mod.ArtifactTarget | None
+
+
+@dataclass(frozen=True)
+class FormatSelection:
+    """Where one format's commands go when --target is omitted."""
+
+    format: cfg_mod.Format
+    source: Literal["selected", "default_mirror", "none"]
+    target: str | None = None
+    type: str | None = None
+
+
+def _single_target(
+    targets: dict[cfg_mod.Format, cfg_mod.ArtifactTarget],
+) -> cfg_mod.ArtifactTarget | None:
+    distinct = {item.stable_selector: item for item in targets.values()}
+    if len(distinct) != 1:
+        return None
+    target = next(iter(distinct.values()))
+    return replace(target, format=next(iter(targets)) if len(targets) == 1 else None)
 
 
 def inspect_selection(profile: str | None = None, account: str | None = None) -> Selection:
@@ -71,6 +96,7 @@ def inspect_selection(profile: str | None = None, account: str | None = None) ->
         if account_ref is not None and selected is None:
             output.warn(f"The selected account {account_ref} is not available to this sign-in.")
     cached = cfg_mod.cached_account(profile_name, account_ref) if account_ref else None
+    targets = dict(cached.selected_targets) if cached is not None else {}
     return Selection(
         profile_name=profile_name,
         profile_source=(
@@ -81,8 +107,84 @@ def inspect_selection(profile: str | None = None, account: str | None = None) ->
         account=selected,
         account_ref=account_ref,
         account_source=account_source,
-        target=cached.selected_target if cached is not None else None,
+        targets=targets,
+        target=_single_target(targets),
     )
+
+
+def _default_mirrors(selection: Selection) -> dict[str, str | None] | None:
+    """Return each package format's default mirror name, or ``None`` if unknown."""
+    from .api import artifacts_path, collection_all
+    from .artifacts.targets import default_official_cache, remote_target_name
+    from .client import ApiClient, ApiError
+
+    try:
+        remotes = collection_all(
+            ApiClient.from_profile(selection.profile_name),
+            artifacts_path("remote-caches"),
+            {"account_ref": selection.account_ref},
+        )
+    except ApiError, httpx.HTTPError, KeyError, TypeError, ValueError:
+        return None
+    result: dict[str, str | None] = {}
+    for kind in _PACKAGE_FORMATS:
+        remote = default_official_cache(remotes, kind)
+        result[kind] = remote_target_name(remote) if remote is not None else None
+    return result
+
+
+_PACKAGE_FORMATS = ("pypi", "npm", "maven")
+
+
+def format_selections(selection: Selection) -> list[FormatSelection]:
+    """Describe every format: its selection, the automatic default mirror, or nothing.
+
+    Only a personal account's interactive session uses a default mirror, and only
+    for package formats; the mirror names are looked up without changing anything.
+    """
+    from .artifacts.targets import interactive_session
+
+    personal = (
+        selection.account is not None
+        and selection.account.get("type") == "personal"
+        and interactive_session()
+    )
+    unselected = [kind for kind in _PACKAGE_FORMATS if kind not in selection.targets]
+    mirrors = _default_mirrors(selection) if personal and unselected else None
+    rows: list[FormatSelection] = []
+    for kind in cfg_mod.FORMAT_VALUES:
+        target = selection.targets.get(kind)
+        if target is not None:
+            rows.append(
+                FormatSelection(kind, "selected", target.display_selector, target.target_type)
+            )
+        elif personal and kind in _PACKAGE_FORMATS and (mirrors is None or mirrors[kind]):
+            # An unknown mirror name still means the command will use the default.
+            name = mirrors[kind] if mirrors is not None else None
+            rows.append(FormatSelection(kind, "default_mirror", name, "official_cache"))
+        else:
+            rows.append(FormatSelection(kind, "none"))
+    return rows
+
+
+def formats_json(rows: list[FormatSelection]) -> dict[str, dict]:
+    return {
+        row.format: {"target": row.target, "type": row.type, "source": row.source} for row in rows
+    }
+
+
+def format_rows(rows: list[FormatSelection]) -> dict[str, str]:
+    """Return the human status line of each format."""
+    values: dict[str, str] = {}
+    for row in rows:
+        if row.source == "selected":
+            value = row.target or ""
+        elif row.source == "default_mirror":
+            value = f"{row.target or 'default mirror'} (default mirror, automatic)"
+        else:
+            value = "not selected"
+        values[f"{row.format} target"] = value
+    return values
 
 
 def with_source(value: str, source: str) -> str:
@@ -143,6 +245,7 @@ def status(
     """Show who is signed in and what the CLI currently acts on."""
     selection = inspect_selection(profile)
     target = selection.target
+    rows = format_selections(selection)
     account = selection_account_display(selection)
     output.kv(
         {
@@ -151,11 +254,7 @@ def status(
             "Account": (
                 with_source(account, selection.account_source) if account else "not selected"
             ),
-            "Artifacts target": (
-                " · ".join(part for part in (target.display_selector, target.format) if part)
-                if target is not None
-                else "not selected"
-            ),
+            **format_rows(rows),
             "Ravenstash API": selection.api_url,
         },
         title="Ravenstash status",
@@ -166,7 +265,10 @@ def status(
             },
             "signed_in_as": _identity_json(selection.identity),
             "account": account_json(selection),
-            "targets": {"artifacts": target_json(target)},
+            "targets": {
+                "artifacts": target_json(target),
+                "artifacts_by_format": formats_json(rows),
+            },
             "api_url": selection.api_url,
         },
     )

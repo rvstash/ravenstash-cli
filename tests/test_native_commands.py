@@ -1179,7 +1179,9 @@ def test_native_python_build_without_installs_needs_no_target_or_access(
 ) -> None:
     _isolate_config(monkeypatch, tmp_path)
     _mock_native_tools(monkeypatch)
-    cfg_mod.set_selected_artifact_target(None, profile="staging", account_ref="ac_23456789")
+    cfg_mod.update_selected_artifact_targets(
+        clear=cfg_mod.FORMAT_VALUES, profile="staging", account_ref="ac_23456789"
+    )
     monkeypatch.delenv("PIP_INDEX_URL", raising=False)
     monkeypatch.delenv("NETRC", raising=False)
     minted = _record_mints(monkeypatch)
@@ -1373,7 +1375,9 @@ def test_missing_target_never_launches_or_infers_from_native_config(
 ):
     _isolate_config(monkeypatch, tmp_path)
     _mock_native_tools(monkeypatch)
-    cfg_mod.set_selected_artifact_target(None, profile="staging", account_ref="ac_23456789")
+    cfg_mod.update_selected_artifact_targets(
+        clear=cfg_mod.FORMAT_VALUES, profile="staging", account_ref="ac_23456789"
+    )
     monkeypatch.setenv("PIP_INDEX_URL", f"{PYPI_READ_URL}/in/ar_xyzabcde/simple/")
     calls = []
     _capture_run(monkeypatch, calls)
