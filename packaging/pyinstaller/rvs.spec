@@ -43,6 +43,7 @@ RUNTIME_DISTRIBUTIONS = (
     "markdown-it-py",
     "mdurl",
     "more-itertools",
+    "packaging",
     "pycparser",
     "Pygments",
     "pywin32-ctypes",
@@ -54,6 +55,7 @@ RUNTIME_DISTRIBUTIONS = (
     "tomli-w",
     "truststore",
     "typer",
+    "typing_extensions",
 )
 
 datas = [(str(ROOT / "rvs" / "resources" / "ravenstash-cli.asc"), "rvs/resources")]

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from packaging.markers import Marker
+from packaging.utils import canonicalize_name
 from rvs.portable_update import extract_release
 
 
@@ -81,18 +83,90 @@ def test_release_artifacts_include_license_and_notice() -> None:
     assert 'ROOT / "NOTICE"' in portable_build
 
 
+# One environment per release target family; architecture does not change any
+# dependency marker today, but both are listed so that a future marker would.
+_BUNDLE_ENVIRONMENTS = [
+    {
+        "sys_platform": sys_platform,
+        "platform_system": platform_system,
+        "platform_machine": machine,
+        "os_name": "nt" if sys_platform == "win32" else "posix",
+        "python_version": "3.14",
+        "python_full_version": "3.14.0",
+        "implementation_name": "cpython",
+        "platform_python_implementation": "CPython",
+        "extra": "",
+    }
+    for sys_platform, platform_system, machines in (
+        ("linux", "Linux", ("x86_64", "aarch64")),
+        ("darwin", "Darwin", ("x86_64", "arm64")),
+        ("win32", "Windows", ("AMD64", "ARM64")),
+    )
+    for machine in machines
+]
+
+
+def _bundled_runtime_distributions() -> set[str]:
+    """Return the locked runtime closure of ravenstash-cli on every release target."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    packages = {canonicalize_name(package["name"]): package for package in lock["package"]}
+    bundled: set[str] = set()
+    for environment in _BUNDLE_ENVIRONMENTS:
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+        pending: list[tuple[str, tuple[str, ...]]] = [("ravenstash-cli", ())]
+        while pending:
+            name, extras = pending.pop()
+            if (name, extras) in seen:
+                continue
+            seen.add((name, extras))
+            bundled.add(name)
+            package = packages[name]
+            dependencies = list(package.get("dependencies", []))
+            for extra in extras:
+                dependencies += package.get("optional-dependencies", {}).get(extra, [])
+            for dependency in dependencies:
+                marker = dependency.get("marker")
+                if marker is not None and not Marker(marker).evaluate(environment):
+                    continue
+                pending.append(
+                    (
+                        canonicalize_name(dependency["name"]),
+                        tuple(sorted(dependency.get("extra", []))),
+                    )
+                )
+    return bundled
+
+
+def _spec_runtime_distributions(spec: str) -> set[str]:
+    block = re.search(r"^RUNTIME_DISTRIBUTIONS = \((.*?)^\)", spec, re.MULTILINE | re.DOTALL)
+    assert block is not None
+    return {canonicalize_name(name) for name in re.findall(r'"([^"]+)"', block.group(1))}
+
+
 def test_portable_bundle_includes_runtime_dependency_license_metadata() -> None:
     spec = (ROOT / "packaging/pyinstaller/rvs.spec").read_text(encoding="utf-8")
 
-    assert '"cryptography"' in spec
     assert '"rvs/resources"' in spec
-    assert '"httpcore2"' in spec
-    assert '"httpx2"' in spec
-    assert '"idna"' in spec
-    assert '"truststore"' in spec
     assert '"httpcore"' not in spec
     assert '"httpx"' not in spec
     assert "datas += _metadata(distribution)" in spec
+
+    # Every bundled distribution ships its metadata, which carries its license
+    # files; a new runtime dependency must be added to the spec.
+    listed = _spec_runtime_distributions(spec)
+    bundled = _bundled_runtime_distributions()
+    assert sorted(bundled - listed) == []
+    assert sorted(listed - bundled) == []
+
+
+def test_bundle_metadata_check_follows_platform_markers() -> None:
+    bundled = _bundled_runtime_distributions()
+
+    assert {"cryptography", "packaging", "typing-extensions"} <= bundled
+    assert {"colorama", "pywin32-ctypes"} <= bundled
+    assert {"jeepney", "secretstorage"} <= bundled
+    assert "httpx2-jsfetch" not in bundled
+    assert not {"pytest", "ruff", "pyinstaller", "cyclonedx-bom"} & bundled
 
 
 def test_bundled_update_key_matches_release_signing_identity() -> None:

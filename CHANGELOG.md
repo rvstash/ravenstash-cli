@@ -6,6 +6,10 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 ## [Unreleased]
 
+### Fixed
+
+- The native bundles include the license files of the bundled packaging and typing_extensions libraries, like those of every other bundled library.
+
 ## [0.17.0] - 2026-11-25
 
 ### Added
