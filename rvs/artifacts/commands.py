@@ -904,32 +904,40 @@ def remote_create(
             output.fatal(f"Official mirror source '{source}' was not found.")
         if len(matches) > 1:
             output.fatal(f"Official mirror source '{source}' is ambiguous. Pass --format.")
-        payload: dict[str, object] = {
-            "account_ref": account_ref,
-            "source_ref": matches[0]["ref"],
-        }
-        if min_age_hours is not None:
-            payload["min_age_hours"] = min_age_hours
-        if max_age_hours is not None:
-            payload["max_age_hours"] = max_age_hours
-        try:
-            response = client.post(artifacts_path("remote-caches"), json=payload)
-            item = response.json()
-            # Ravenstash answers 200 with the account's existing mirror.
-            existed = getattr(response, "status_code", 201) == 200
-        except ApiError as exc:
-            # Older servers refuse a second mirror of the same source.
-            if exc.status_code != 409:
-                raise
-            found = _existing_official_cache(client, account_ref, matches[0])
-            if found is None:
-                raise
+        # Personal accounts already have every Ravenstash-provided mirror, so
+        # look for it first; the request below is only for a missing one.
+        found = _existing_official_cache(client, account_ref, matches[0])
+        if found is not None:
             item, existed = found, True
+        else:
+            payload: dict[str, object] = {
+                "account_ref": account_ref,
+                "source_ref": matches[0]["ref"],
+            }
+            if min_age_hours is not None:
+                payload["min_age_hours"] = min_age_hours
+            if max_age_hours is not None:
+                payload["max_age_hours"] = max_age_hours
+            try:
+                response = client.post(artifacts_path("remote-caches"), json=payload)
+                item = response.json()
+                # Ravenstash answers 200 with the account's existing mirror.
+                existed = getattr(response, "status_code", 201) == 200
+            except ApiError as exc:
+                # Older servers refuse a second mirror of the same source.
+                if exc.status_code != 409:
+                    raise
+                found = _existing_official_cache(client, account_ref, matches[0])
+                if found is None:
+                    raise
+                item, existed = found, True
     except (ApiError, KeyError, TypeError, ValueError) as exc:
         output.fatal(str(exc))
     target_name = remote_target_name(item)
     if existed:
         output.success(f"Private mirror '{target_name}' already exists.")
+        if min_age_hours is not None or max_age_hours is not None:
+            output.note("Age options apply only to a new mirror; change them in the dashboard.")
     else:
         output.success(f"Added private mirror '{target_name}'.")
     if select:

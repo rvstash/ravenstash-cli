@@ -129,6 +129,9 @@ class FakeApi:
         if path == "/v0/artifacts/remote-caches":
             if isinstance(self.create, Exception):
                 raise self.create
+            created = self.create.json()
+            if created not in self.remotes:
+                self.remotes.append(created)
             return self.create
         for item in self.remotes:
             if path == f"/v0/artifacts/remote-caches/{item['ref']}/mint-token":
@@ -591,7 +594,7 @@ def test_mirror_create_by_format_uses_the_default_source(monkeypatch, tmp_path):
     created = official(PERSONAL, "pypi", "pypiorg")
     fake = serve(
         monkeypatch,
-        FakeApi([PERSONAL], [created], sources=SOURCES, create=Response(created, 201)),
+        FakeApi([PERSONAL], [], sources=SOURCES, create=Response(created, 201)),
     )
 
     result = runner.invoke(app, ["art", "mirror", "create", "--format", "pypi", "--select"])
@@ -605,7 +608,22 @@ def test_mirror_create_by_format_uses_the_default_source(monkeypatch, tmp_path):
 def test_mirror_create_reuses_an_existing_mirror(monkeypatch, tmp_path):
     isolate(monkeypatch, tmp_path)
     existing = official(PERSONAL, "pypi", "pypiorg")
-    serve(monkeypatch, FakeApi([PERSONAL], [existing], sources=SOURCES, create=Response(existing)))
+    fake = serve(
+        monkeypatch, FakeApi([PERSONAL], [existing], sources=SOURCES, create=Response(existing))
+    )
+
+    result = runner.invoke(app, ["art", "mirror", "create", "pypiorg", "--min-age-hours", "48"])
+
+    assert result.exit_code == 0, result.output
+    assert "Private mirror 'mirror:pypiorg' already exists" in text(result)
+    assert "Age options apply only to a new mirror" in text(result)
+    assert "POST" not in [method for method, _path, _body in fake.calls]
+
+
+def test_mirror_create_reports_a_server_answer_for_an_existing_mirror(monkeypatch, tmp_path):
+    isolate(monkeypatch, tmp_path)
+    existing = official(PERSONAL, "pypi", "pypiorg")
+    serve(monkeypatch, FakeApi([PERSONAL], [], sources=SOURCES, create=Response(existing, 200)))
 
     result = runner.invoke(app, ["art", "mirror", "create", "pypiorg"])
 
@@ -619,15 +637,25 @@ def test_mirror_create_treats_an_older_server_conflict_as_existing(monkeypatch, 
     sources = [
         {key: value for key, value in item.items() if key != "is_default"} for item in SOURCES
     ]
-    serve(
+
+    class _CreatedConcurrently(FakeApi):
+        """The mirror appears between the first lookup and the request."""
+
+        def post(self, path: str, json: dict[str, Any] | None = None) -> Response:
+            if path == "/v0/artifacts/remote-caches":
+                self.remotes.append(existing)
+            return super().post(path, json)
+
+    fake = serve(
         monkeypatch,
-        FakeApi([PERSONAL], [existing], sources=sources, create=ApiError(409, "Conflict")),
+        _CreatedConcurrently([PERSONAL], [], sources=sources, create=ApiError(409, "Conflict")),
     )
 
     result = runner.invoke(app, ["art", "mirror", "create", "--format", "pypi", "--select"])
 
     assert result.exit_code == 0, result.output
     assert "already exists" in text(result)
+    assert ("POST", "/v0/artifacts/remote-caches") in [(m, p) for m, p, _ in fake.calls]
     assert selected() == {"pypi": "mirror:pypiorg"}
 
 

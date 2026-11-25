@@ -477,7 +477,7 @@ def test_artifacts_mirror_create_uses_the_default_official_source(
 ) -> None:
     _isolate_config(monkeypatch, tmp_path)
     fake = _FakeApiClient(
-        [[{"ref": "pypiorg", "format": "pypi", "display_name": "PyPI"}], _remote_cache()]
+        [[{"ref": "pypiorg", "format": "pypi", "display_name": "PyPI"}], [], _remote_cache()]
     )
     _use_fake_client(monkeypatch, fake)
 
@@ -490,6 +490,11 @@ def test_artifacts_mirror_create_uses_the_default_official_source(
             "GET",
             "/v0/artifacts/official-sources",
             {"account_ref": "ac_23456789", "limit": 100},
+        ),
+        (
+            "GET",
+            "/v0/artifacts/remote-caches",
+            {"account_ref": "ac_23456789", "format": "pypi", "limit": 100},
         ),
         (
             "POST",
@@ -515,6 +520,7 @@ def test_artifacts_official_remote_add_uses_public_source_ref(monkeypatch, tmp_p
                 ],
                 "next_cursor": None,
             },
+            [],
             _remote_cache(ref="rc_23456789"),
         ]
     )
@@ -530,6 +536,11 @@ def test_artifacts_official_remote_add_uses_public_source_ref(monkeypatch, tmp_p
             "GET",
             "/v0/artifacts/official-sources",
             {"account_ref": "ac_23456789", "limit": 100},
+        ),
+        (
+            "GET",
+            "/v0/artifacts/remote-caches",
+            {"account_ref": "ac_23456789", "format": "pypi", "limit": 100},
         ),
         (
             "POST",
