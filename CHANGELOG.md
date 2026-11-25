@@ -6,6 +6,27 @@ The CLI and the Ravenstash API are pre-1.0: commands, options, and output can ch
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-25
+
+### Added
+
+- A personal account signed in with `rvs auth login` installs public packages right away: when nothing is selected for pypi, npm, or maven, reads through `rvs pip`, `rvs uv`, `rvs python -m build`, `rvs npm`, `rvs pnpm`, and `rvs mvn` use the account's default Ravenstash-provided mirror of that format, and `rvs` names it on standard error. It never applies to publishing or deletion, organization accounts, `RVS_TOKEN` automation, OCI content, or the address, setup, and token commands, and a deleted mirror is never recreated.
+- `rvs art clear --format FORMAT` clears the selection of the named formats only.
+
+### Changed
+
+- `rvs art select` keeps one repository or mirror per format. Without `--format` it selects the target for every format the target has; `--format`, repeated or comma-separated, selects only the named formats. Formats the target lacks keep their selection, so selecting a mirror no longer replaces the repository used for other formats. `rvs art mirror select` and `rvs art mirror create --select` select the mirror for its one format.
+- `rvs art status` and `rvs status` show one line per format: its selection, the default mirror used automatically, or `not selected`. With `--json`, `rvs art status` adds a `formats` object and `rvs status` adds `targets.artifacts_by_format`, each with one `target`, `type`, and `source` entry per format. The earlier single-target fields remain and are filled only when one target is selected for every selected format.
+- `rvs art mirror create` reports the account's existing mirror of a source instead of failing, and `--format` uses the source Ravenstash marks as the default for that format.
+- `rvs docker`, `rvs helm`, and `rvs oras` explain how to choose a private repository with the oci format when none is selected.
+- The configuration file moves to schema 2 the first time this release reads it, and the original is kept as `config.toml.schema-1.bak`. A selection with a format keeps that format; a repository selection without one is kept for every format, as before, until you select the repository again. Earlier releases refuse the upgraded file; restore the backup to use one.
+
+### Fixed
+
+- The command reference no longer claims that `rvs art select --format` stored the format: before this release it only checked that the format was enabled.
+
+Detailed release notes: [Ravenstash CLI 0.17.0](docs/releases/0.17.0.md).
+
 ## [0.16.1] - 2026-11-24
 
 ### Changed
@@ -61,7 +82,8 @@ Detailed release notes: [Ravenstash CLI 0.15.1](docs/releases/0.15.1.md).
 
 Detailed release notes: [Ravenstash CLI 0.15.0](docs/releases/0.15.0.md).
 
-[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/rvstash/ravenstash-cli/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.17.0
 [0.16.1]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.16.1
 [0.16.0]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.16.0
 [0.15.1]: https://github.com/rvstash/ravenstash-cli/releases/tag/v0.15.1
