@@ -48,16 +48,36 @@ rvs mvn verify
 
 `platform/packages` means the `packages` repository in the `platform` namespace. Run `rvs art repo list` to see the repositories available to the selected account, and `rvs status` or `rvs art status` to see what `rvs` acts on.
 
-## Private mirrors
+## One selection per format
 
-A private mirror gives your account a read-only view of a public or custom package source:
+`rvs art select` remembers a repository or mirror separately for each format: pypi, npm, maven, and oci. Without `--format`, it selects the target for every format the target has, and formats it lacks keep their current selection. With `--format`, it selects only the formats you name:
 
 ```bash
-rvs art mirror create pypiorg --select
+rvs art select platform/packages               # every format of the repository
+rvs art select platform/packages --format pypi  # PyPI only
+rvs art select platform/packages -f pypi,npm    # several formats
+rvs art clear --format npm                      # forget the npm selection
+rvs art clear                                   # forget every selection
+```
+
+The formats are recorded when you select: if the repository gains a format later, select it again to use it for that format.
+
+## Private mirrors
+
+A private mirror gives your account a read-only view of a public or custom package source. A personal account comes with a private mirror of each Ravenstash-provided source, so with nothing selected for a format, `rvs pip`, `rvs uv`, `rvs npm`, `rvs pnpm`, and `rvs mvn` install from the default mirror of that format right away:
+
+```bash
+rvs auth login
 rvs pip install requests
 ```
 
-You can switch back to a private repository at any time:
+`rvs` prints which mirror it uses on standard error. This automatic default applies only to a personal account signed in with `rvs auth login`, only to installs and other reads, and only to pypi, npm, and maven. Organization accounts, `RVS_TOKEN` automation, and publishing always use an explicit selection or `--rvs-target`. Choose a mirror explicitly, or another Ravenstash-provided source, with:
+
+```bash
+rvs art mirror select pypiorg
+```
+
+If you deleted a mirror, `rvs` does not recreate it; `rvs art mirror create --format pypi --select` adds it again. Select a private repository again at any time:
 
 ```bash
 rvs art select platform/packages
@@ -115,7 +135,7 @@ Whitespace is trimmed and duplicates are removed. Empty or unknown formats fail 
 
 ## OCI content
 
-OCI is one repository format that holds container images and Helm charts. Use `rvs docker`, `rvs helm`, or `rvs oras` to transfer content; ORAS needs no Ravenstash format flag. Wrapper credentials and logouts stay in temporary configuration, including separate ORAS copy source and destination configs.
+OCI is one repository format that holds container images and Helm charts. Use `rvs docker`, `rvs helm`, or `rvs oras` to transfer content; ORAS needs no Ravenstash format flag. There is no container mirror: these commands always use the private repository selected for oci (`rvs art select NAMESPACE/REPOSITORY`) or `--rvs-target`. Wrapper credentials and logouts stay in temporary configuration, including separate ORAS copy source and destination configs.
 
 Inspect and tag content without launching a native tool:
 

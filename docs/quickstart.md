@@ -11,6 +11,14 @@ rvs auth login
 
 The login command opens Ravenstash in your browser. Return to the terminal when the browser confirms that sign-in is complete.
 
+Your personal account is ready for public packages at once: with nothing selected, `rvs pip`, `rvs uv`, `rvs npm`, `rvs pnpm`, and `rvs mvn` install from your account's default Ravenstash mirror of PyPI, npm, or Maven Central:
+
+```bash
+rvs pip install requests
+```
+
+`rvs` names the mirror it uses on standard error. See [Use a private mirror](#use-a-private-mirror) for the details.
+
 ## 2. Choose a personal account or organization
 
 List the accounts you can use:
@@ -34,7 +42,7 @@ rvs art repo list
 rvs art select platform/packages
 ```
 
-The first name is the namespace and the second is the repository. Your current choice is remembered for the selected account and profile.
+The first name is the namespace and the second is the repository. Your choice is remembered for the selected account and profile, separately for each format: this selects the repository for every format it has. Add `--format pypi` (or `-f pypi,npm`) to select it only for those formats, and use `rvs art clear --format FORMAT` to forget one format's selection.
 
 Check it at any time:
 
@@ -56,14 +64,18 @@ rvs mvn verify
 
 ## Use a private mirror
 
-Choose a Ravenstash-provided mirror when you need public packages:
+A personal account has a private mirror of each Ravenstash-provided source. When nothing is selected for pypi, npm, or maven, installs and other reads through `rvs pip`, `rvs uv`, `rvs npm`, `rvs pnpm`, and `rvs mvn` use the default mirror of that format automatically. This applies only to a personal account signed in with `rvs auth login`; organization accounts and `RVS_TOKEN` automation always need a selection or `--rvs-target`, and publishing never uses a mirror.
+
+To make the choice explicit, or to use another Ravenstash-provided source:
 
 ```bash
-rvs art mirror create pypiorg --select
+rvs art mirror select pypiorg
 rvs pip install requests
 ```
 
-Use `npmjs` for npm or `maven-central` for Maven. A mirror is read-only, so select a private repository again before publishing.
+Use `npmjs` for npm or `maven-central` for Maven. A mirror is read-only and covers one format, so selecting it leaves your other formats unchanged. If you deleted a mirror, add it again with `rvs art mirror create --format pypi --select`.
+
+Container images and Helm charts have no mirror: `rvs docker`, `rvs helm`, and `rvs oras` always need a private repository with the oci format, selected with `rvs art select NAMESPACE/REPOSITORY`.
 
 ## Publish a package
 
@@ -113,6 +125,6 @@ rvs status
 rvs art status
 ```
 
-If no repository is selected, choose one with `rvs art select NAMESPACE/REPOSITORY`. If a name is unclear, use `rvs art repo list` and copy the namespace and repository names shown there.
+`rvs art status` shows one line per format: the selected repository or mirror, the default mirror `rvs` uses automatically, or `not selected`. If nothing is selected for a format you need, choose a repository with `rvs art select NAMESPACE/REPOSITORY`. If a name is unclear, use `rvs art repo list` and copy the namespace and repository names shown there.
 
 For more help, see the [public CLI documentation](https://docs.ravenstash.com/cli/overview/).

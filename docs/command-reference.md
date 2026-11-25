@@ -31,16 +31,20 @@ When a package tool must connect without an `rvs` wrapper, run `rvs art token mi
 | `rvs account switch` | Interactively chooses a personal account or organization. |
 | `rvs account switch user:USERNAME` | Chooses a personal account directly by username. |
 | `rvs account switch org:HANDLE` | Chooses an organization directly by its public handle. |
-| `rvs art select NAMESPACE/REPOSITORY` | Chooses a private repository. |
-| `rvs art status` | Shows the account, repository or mirror, and format that `rvs art` commands use. |
-| `rvs art clear` | Clears that choice without signing out. |
-| `rvs status` | Shows the profile, who is signed in, the account, the selected target, and the API. |
+| `rvs art select NAMESPACE/REPOSITORY` | Chooses a private repository for every format it has. |
+| `rvs art select NAMESPACE/REPOSITORY --format FORMAT` | Chooses it only for the named formats. |
+| `rvs art status` | Shows the account and, for each format, the repository or mirror that commands use. |
+| `rvs art clear` | Clears every format's choice without signing out. |
+| `rvs art clear --format FORMAT` | Clears only the named formats' choices. |
+| `rvs status` | Shows the profile, who is signed in, the account, each format's target, and the API. |
 
-`rvs status` and `rvs art status` only read: they never select, switch, or save anything. A choice made by `RVS_PROFILE`, `RVS_ACCOUNT_REF`, a shell session, or a command option is shown next to its value. With root `--json`, `rvs status` nests the selected target under `targets.artifacts`.
+`rvs status` and `rvs art status` only read: they never select, switch, or save anything. A choice made by `RVS_PROFILE`, `RVS_ACCOUNT_REF`, a shell session, or a command option is shown next to its value. Each format's line shows its selected repository or mirror, the default mirror used automatically (see below), or `not selected`. With root `--json`, `rvs status` nests the targets under `targets`: `targets.artifacts_by_format` has one entry per format with its `target`, `type`, and `source` (`selected`, `default_mirror`, or `none`), and `targets.artifacts` keeps the earlier single-target shape, filled only when one target is selected for every selected format. `rvs art status --json` returns the same per-format entries under `formats`.
 
 With a personal access token or organization automation token in `RVS_TOKEN`, commands act for the one account that owns the token, so a CI job needs no account selection. A saved or shell selection does not apply while the token is set, and `RVS_ACCOUNT_REF`, if set, must name the same account.
 
-`rvs art select` stores a format only when you pass `--format` or the target has exactly one format. Otherwise the format stays empty and each command uses its own: `rvs pip` uses pypi and `rvs npm` uses npm. Running a wrapper never changes the selection.
+`rvs art select` keeps one choice per format: pypi, npm, maven, and oci. Without `--format` it selects the target for every format the target has; a mirror has exactly one format. With `--format` (repeated or comma-separated) it selects only those formats, and each must be enabled on the target. Formats the target lacks, or that you did not name, keep their current choice. The formats are recorded when you select, so select a repository again after it gains a format. `rvs pip` uses the pypi choice, `rvs npm` the npm choice, and so on. Running a wrapper never changes a selection.
+
+When nothing is selected for pypi, npm, or maven, a personal account signed in with `rvs auth login` reads from its default Ravenstash-provided mirror of that format: Ravenstash creates these mirrors for every personal account. `rvs` prints the mirror it uses on standard error and saves nothing. This automatic default applies only to installs and other reads through the native wrappers. It never applies to publishing or deletion, to organization accounts, to commands authenticated with `RVS_TOKEN`, to OCI content, or to commands that print addresses, setup templates, or tokens (`rvs art endpoint`, `rvs art native config`, `rvs art token mint`), which always use a selected or explicit target. A deleted mirror is not recreated; `rvs art mirror create --format FORMAT --select` adds it again.
 
 Account resources are always displayed as `user:USERNAME` or `org:HANDLE` so they remain distinct from unprefixed namespace names. A bare account handle is also accepted as a selector.
 
@@ -69,11 +73,13 @@ The repository's own packages are always checked first and have no stored positi
 | Command | What it does |
 | --- | --- |
 | `rvs art mirror list` | Lists private mirrors and their `rc_...` remote-cache permanent IDs. |
-| `rvs art mirror create SOURCE` | Adds a Ravenstash-provided mirror. |
+| `rvs art mirror create SOURCE` | Adds a Ravenstash-provided mirror, or reports the one the account already has. |
 | `rvs art mirror create --format FORMAT` | Adds the default mirror for a package format. |
 | `rvs art mirror show REMOTE_CACHE_ID` | Shows a private mirror through its owning remote-cache permanent ID. |
-| `rvs art mirror select SOURCE` | Chooses a Ravenstash-provided mirror. |
-| `rvs art mirror select --custom NAME` | Chooses a custom mirror. |
+| `rvs art mirror select SOURCE` | Chooses a Ravenstash-provided mirror for its format. |
+| `rvs art mirror select --custom NAME` | Chooses a custom mirror for its format. |
+
+Add `--select` to `mirror create` to choose the mirror for its format at once.
 
 ## Browser-only operations
 
@@ -97,7 +103,7 @@ Renaming or deleting a repository, changing a repository's package sources, chan
 | `rvs art package tag set PACKAGE TAG VERSION` | Creates one of the repository's own tags or moves it to `VERSION`. |
 | `rvs art package tag delete PACKAGE TAG` | Deletes one of the repository's own tags at once; the version stays. |
 
-Package commands act on the repository chosen with `rvs art select` unless you pass `--target NAMESPACE/REPOSITORY` (or `in/ar_...`). `--format` is needed only when that repository has more than one of pypi, npm, and maven; yank and unyank always use pypi, and deprecate and undeprecate always use npm.
+Package commands act on the repository chosen with `rvs art select` unless you pass `--target NAMESPACE/REPOSITORY` (or `in/ar_...`). With `--format`, the repository selected for that format is used; without it, the pypi, npm, and maven formats selected with a repository must all use the same repository. `--format` is needed only when that repository has more than one of pypi, npm, and maven; yank and unyank always use pypi, and deprecate and undeprecate always use npm.
 
 Versions are listed newest first. When more versions exist than are shown, `package show` says so on stderr. With root `--json`, `package show` prints one document with the `package` summary, the listed `versions`, and `versions_next_cursor`, which is null once every version is listed; `--version` prints one document with the version's metadata, its `file_count`, and every one of its `files`, each carrying a `digests` object keyed by algorithm (such as `sha256`, `sha512`, `md5`, or `blake2b_256`).
 
@@ -162,6 +168,8 @@ rvs oras ORAS_ARGUMENTS...
 ```
 
 The commands accept `--rvs-profile`, `--rvs-account`, and `--rvs-target` where applicable. Advanced integrations may pass a typed `--rvs-account-ref`. Publishing commands also accept `--rvs-yes` for protected automation.
+
+Each wrapper uses the target selected for its format: pypi for `pip`, `uv`, `twine`, and `python`; npm for `npm` and `pnpm`; maven for `mvn`; and oci for `docker`, `helm`, and `oras`. Without a selection, reads by a personal account signed in with `rvs auth login` use the default mirror of the format, as described under [Accounts and the current repository](#accounts-and-the-current-repository). Container images and Helm charts have no mirror, so `rvs docker`, `rvs helm`, and `rvs oras` always need a private repository with the oci format.
 
 These are native-tool passthroughs rather than a second package-management API. For example, use `rvs pip install PACKAGE`, `rvs twine upload dist/*`, `rvs npm publish`, or `rvs mvn deploy`. Publishing commands ask for confirmation unless `--rvs-yes` is supplied.
 
