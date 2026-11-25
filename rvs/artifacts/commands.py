@@ -842,9 +842,8 @@ def _default_official_source(sources: list[dict], kind: str) -> dict | None:
     marked = [item for item in candidates if item.get("is_default") is True]
     if marked:
         return marked[0]
-    if any("is_default" in item for item in candidates):
-        return None
-    # A server that predates the marker uses the well-known default names.
+    # Without a marked source (a server that predates the marker, or one that
+    # reports it before its backend does), use the well-known default names.
     fallback = DEFAULT_OFFICIAL_SOURCES.get(cast("PackageFormat", kind))
     return next((item for item in candidates if item.get("ref") == fallback), None)
 

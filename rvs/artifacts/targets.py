@@ -351,8 +351,9 @@ def default_mirror_applies(
 def default_official_cache(remotes: list[dict], kind: str) -> dict | None:
     """Return the account's cache of the default official source for *kind*.
 
-    Ravenstash marks that cache with ``is_default``. A server that predates the
-    marker is matched by the default source's well-known name instead.
+    Ravenstash marks that cache with ``is_default``. Without a marked cache (a
+    server that predates the marker, or reports it before its backend does), the
+    default source's well-known name is used instead.
     """
     official = [
         item
@@ -362,8 +363,6 @@ def default_official_cache(remotes: list[dict], kind: str) -> dict | None:
     marked = [item for item in official if item.get("is_default") is True]
     if marked:
         return marked[0]
-    if any("is_default" in item for item in official):
-        return None
     fallback = DEFAULT_OFFICIAL_SOURCES.get(cast("PackageFormat", kind))
     return next(
         (

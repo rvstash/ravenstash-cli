@@ -678,7 +678,7 @@ def test_mirror_create_reports_other_failures(monkeypatch, tmp_path, remotes, er
 
 def test_mirror_create_without_a_default_source_fails(monkeypatch, tmp_path):
     isolate(monkeypatch, tmp_path)
-    sources = [{**item, "is_default": False} for item in SOURCES]
+    sources = [{**item, "is_default": False} for item in SOURCES if item["ref"] != "pypiorg"]
     serve(monkeypatch, FakeApi([PERSONAL], [], sources=sources))
 
     result = runner.invoke(app, ["art", "mirror", "create", "--format", "pypi"])
@@ -697,3 +697,11 @@ def test_default_official_cache_ignores_other_accounts_formats_and_families():
         targets.default_official_cache([official(PERSONAL, "oci", "x", default=None)], "oci")
         is None
     )
+
+
+def test_an_unmarked_listing_falls_back_to_the_well_known_default():
+    unmarked = official(PERSONAL, "pypi", "pypiorg", default=False)
+    other = official(PERSONAL, "pypi", "pytorch", default=False)
+    assert targets.default_official_cache([other, unmarked], "pypi") == unmarked
+    marked = official(PERSONAL, "pypi", "pytorch", default=True)
+    assert targets.default_official_cache([unmarked, marked], "pypi") == marked
